@@ -1,0 +1,69 @@
+version: '2'
+
+linters:
+  default: all
+  disable:
+    - cyclop
+    - depguard
+    - err113
+    - errorlint
+    - exhaustive
+    - exhaustruct
+    - forcetypeassert
+    - funcorder
+    - gochecknoglobals
+    - gochecknoinits
+    - gocyclo
+    - godox
+    - gosec
+    - gosmopolitan
+    - ireturn
+    - mnd
+    - nlreturn
+    - noinlineerr
+    - nonamedreturns
+    - paralleltest
+    - recvcheck
+    - varnamelen
+    - wrapcheck
+    - wsl
+    - wsl_v5
+  settings:
+    funlen:
+      # Complexity is already covered by gocognit.
+      statements: -1
+    govet:
+      enable-all: true
+      disable: [fieldalignment]
+    nolintlint:
+      require-specific: true
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - linters:
+          - funlen
+          - gocognit
+          - goconst
+          - gocritic
+          - lll
+        path: (.+)_test.go
+      - linters: [govet]
+        text: 'shadow: declaration of "err" shadows declaration'
+      - linters: [goconst]
+        source: 'fs\.PathError'
+    paths:
+      - testdata
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gofmt:
+      rewrite-rules:
+        - pattern: interface{}
+          replacement: any
+    gofumpt:
+      extra-rules: true
