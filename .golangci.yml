@@ -5,6 +5,7 @@ linters:
   disable:
     - cyclop
     - depguard
+    - dogsled
     - err113
     - errorlint
     - exhaustive
@@ -50,10 +51,6 @@ linters:
         path: (.+)_test.go
       - linters: [govet]
         text: 'shadow: declaration of "err" shadows declaration'
-      - linters: [goconst]
-        source: 'fs\.PathError'
-    paths:
-      - testdata
 
 formatters:
   enable:
