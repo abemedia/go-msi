@@ -7,6 +7,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/abemedia/go-msi/internal/codepage"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/transform"
 )
@@ -104,9 +105,9 @@ func (e *encoder) properties(props []Property) error {
 		if !ok {
 			return errors.New("oleps: invalid code page property")
 		}
-		enc, err := resolveEncoding(uint16(cp))
-		if err != nil {
-			return err
+		enc := codepage.Encoding(uint16(cp))
+		if enc == nil {
+			return fmt.Errorf("%w: code page %d", ErrUnsupported, cp)
 		}
 		e.cp, e.enc = uint16(cp), enc.NewEncoder()
 		break
