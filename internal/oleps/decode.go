@@ -8,6 +8,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/abemedia/go-msi/internal/codepage"
 	"golang.org/x/text/encoding"
 )
 
@@ -127,9 +128,9 @@ func (d *decoder) properties() ([]Property, error) {
 	if err != nil {
 		return nil, err
 	}
-	enc, err := resolveEncoding(cp)
-	if err != nil {
-		return nil, err
+	enc := codepage.Encoding(cp)
+	if enc == nil {
+		return nil, fmt.Errorf("%w: code page %d", ErrUnsupported, cp)
 	}
 	d.cp, d.dec = cp, enc.NewDecoder()
 
