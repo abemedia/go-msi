@@ -6,8 +6,6 @@ package stringpool
 import (
 	"errors"
 	"fmt"
-
-	"github.com/abemedia/go-msi/internal/codepage"
 )
 
 // ErrUnsupportedCodePage is returned when a pool uses a code page this package does
@@ -40,7 +38,7 @@ type Pool struct {
 func New(cp uint16) (*Pool, error) { return newPool(cp, 0, false) }
 
 func newPool(cp uint16, capHint int, longRefs bool) (*Pool, error) {
-	if codepage.Encoding(cp) == nil {
+	if getEncoding(cp) == nil {
 		return nil, fmt.Errorf("%w %d", ErrUnsupportedCodePage, cp)
 	}
 	return &Pool{
@@ -53,6 +51,20 @@ func newPool(cp uint16, capHint int, longRefs bool) (*Pool, error) {
 
 // Codepage returns the Windows code page strings are stored in.
 func (p *Pool) Codepage() uint16 { return p.codepage }
+
+// SetCodepage sets the code page used by [Encode]. Returns
+// [ErrUnsupportedCodePage] if cp is not implemented.
+func (p *Pool) SetCodepage(cp uint16) error {
+	if getEncoding(cp) == nil {
+		return fmt.Errorf("%w %d", ErrUnsupportedCodePage, cp)
+	}
+	p.codepage = cp
+	return nil
+}
+
+// Len returns the number of entries currently in the pool, including
+// released slots that remain reserved by ID. A fresh pool returns 0.
+func (p *Pool) Len() int { return len(p.entries) }
 
 // LongRefs reports whether table-stream string references are 3 bytes
 // instead of 2. Sticky once set (either by reading a file with the flag
@@ -73,6 +85,16 @@ func (p *Pool) Lookup(id uint32) (string, bool) {
 		return "", false
 	}
 	return e.s, true
+}
+
+// LookupID returns the ID of s. The empty string returns (0, true) for
+// the canonical NULL ID; an absent string returns (0, false).
+func (p *Pool) LookupID(s string) (id uint32, ok bool) {
+	if s == "" {
+		return 0, true
+	}
+	id, ok = p.index[s]
+	return id, ok
 }
 
 // Intern returns the ID for s, creating an entry if absent. Each call

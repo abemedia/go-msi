@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/abemedia/go-msi/internal/codepage"
 	"golang.org/x/text/transform"
 )
 
 // Encode emits the _StringPool and _StringData streams.
 func Encode(p *Pool) (pool, data []byte, err error) {
-	encoder := codepage.Encoding(p.codepage).NewEncoder()
+	encoder := getEncoding(p.codepage).NewEncoder()
 
 	// Worst case: every entry needs an 8-byte long-string record.
 	pool = make([]byte, 4+8*len(p.entries))

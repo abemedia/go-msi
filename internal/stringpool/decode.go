@@ -7,7 +7,6 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/abemedia/go-msi/internal/codepage"
 	"golang.org/x/text/transform"
 )
 
@@ -35,7 +34,7 @@ func Decode(pool, data []byte) (*Pool, error) { //nolint:funlen
 	if err != nil {
 		return nil, err
 	}
-	dec := codepage.Encoding(uint16(cp)).NewDecoder()
+	dec := getEncoding(uint16(cp)).NewDecoder()
 
 	decoded := make([]byte, 0, len(data))
 	ends := make([]int, 0, maxLen)

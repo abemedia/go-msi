@@ -1,14 +1,14 @@
-package codepage_test
+package stringpool_test
 
 import (
 	"testing"
 
-	"github.com/abemedia/go-msi/internal/codepage"
+	"github.com/abemedia/go-msi/internal/stringpool"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/unicode"
 )
 
-func TestEncoding(t *testing.T) {
+func TestCodepageEncoding(t *testing.T) {
 	tests := []struct {
 		cp   uint16
 		want any
@@ -17,14 +17,14 @@ func TestEncoding(t *testing.T) {
 		{65001, unicode.UTF8},
 		{1252, charmap.Windows1252},
 		{28591, charmap.ISO8859_1},
-		{0, nil},   // CP_ACP - not supported
-		{437, nil}, // OEM US - not supported
+		{0, charmap.Windows1252}, // MSI "neutral" marker, aliased to Windows-1252
+		{437, nil},               // OEM US - not supported
 	}
 
 	for _, tc := range tests {
-		got := codepage.Encoding(tc.cp)
+		got := stringpool.CodepageEncoding(tc.cp)
 		if got != tc.want {
-			t.Errorf("Encoding(%d) = %v, want %v", tc.cp, got, tc.want)
+			t.Errorf("CodepageEncoding(%d) = %v, want %v", tc.cp, got, tc.want)
 		}
 	}
 }
