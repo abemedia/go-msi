@@ -8,6 +8,13 @@ import (
 
 const benchName = "InstallExecuteSequence"
 
+func BenchmarkEncodedLen(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = streamname.EncodedLen(benchName)
+	}
+}
+
 func BenchmarkEncode(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {

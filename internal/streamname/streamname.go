@@ -3,6 +3,7 @@
 package streamname
 
 import (
+	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
 )
@@ -15,6 +16,25 @@ const (
 	singleBase = 0x4800 // one symbol: singleBase + symbol
 	pairBase   = 0x3800 // two symbols: pairBase + symbol1 + symbol2<<symbolBits
 )
+
+// EncodedLen returns the number of UTF-16 code units that [Encode] would occupy.
+func EncodedLen(s string) int {
+	n := 0
+	for i := 0; i < len(s); {
+		if encodeSymbol(rune(s[i])) >= 0 {
+			n++
+			i++
+			if i < len(s) && encodeSymbol(rune(s[i])) >= 0 {
+				i++ // paired into the same wchar
+			}
+			continue
+		}
+		r, sz := utf8.DecodeRuneInString(s[i:])
+		n += utf16.RuneLen(r)
+		i += sz
+	}
+	return n
+}
 
 // Encode returns the compound-file stream name for the MSI name s.
 // Any character other than an ASCII letter, digit, '.', or '_' is passed
