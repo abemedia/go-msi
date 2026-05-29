@@ -6,13 +6,12 @@ import (
 	"github.com/abemedia/go-msi/internal/stringpool"
 )
 
-func TestEncodeStringNotInCodepage(t *testing.T) {
+func TestInternStringNotInCodepage(t *testing.T) {
 	p, err := stringpool.New(1252)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Intern("日本語") // not representable in Windows-1252
-	if _, _, err := stringpool.Encode(p); err == nil {
-		t.Error("Encode succeeded, want error")
+	if _, err := p.Intern("日本語", true); err == nil { // not representable in Windows-1252
+		t.Error("Intern succeeded, want error")
 	}
 }
