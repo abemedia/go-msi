@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="HelloWorld"
+           Manufacturer="go-msi tests"
+           Version="1.0.0"
+           UpgradeCode="A4F7B2D1-3C8E-4F2A-9B1D-8E5F6A7C3D2E"
+           Language="1033">
+
+    <Package InstallerVersion="200"
+             Compressed="yes"
+             Manufacturer="go-msi tests"
+             Description="HelloWorld test fixture"/>
+
+    <Media Id="1" Cabinet="hello.cab" EmbedCab="yes"/>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLFOLDER" Name="HelloWorld">
+          <Component Id="HelloComponent" Guid="B5A6C8D2-4F1E-4A3B-8C5D-9E7F1A2B3C4D">
+            <File Id="HelloFile" Source="hello.txt" KeyPath="yes"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="MainFeature" Title="Main" Level="1">
+      <ComponentRef Id="HelloComponent"/>
+    </Feature>
+  </Product>
+</Wix>

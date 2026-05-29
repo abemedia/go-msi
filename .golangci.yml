@@ -23,10 +23,12 @@ linters:
     - ireturn
     - mnd
     - nlreturn
+    - noctx
     - noinlineerr
     - nonamedreturns
     - paralleltest
     - recvcheck
+    - unqueryvet
     - varnamelen
     - wrapcheck
     - wsl
@@ -50,6 +52,7 @@ linters:
           - goconst
           - gocritic
           - lll
+          - prealloc
         path: (.+)_test.go
       - linters: [govet]
         text: 'shadow: declaration of "err" shadows declaration'
