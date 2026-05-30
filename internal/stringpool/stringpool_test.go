@@ -20,34 +20,35 @@ func TestPool(t *testing.T) {
 	if _, ok := p.Lookup(1); ok {
 		t.Error("Lookup(1) ok = true, want false (out of range)")
 	}
-	if id := p.Intern(""); id != 0 {
+	if id, _ := p.Intern("", true); id != 0 {
 		t.Errorf("Intern(\"\") = %d, want 0", id)
 	}
 
-	a, b := p.Intern("a"), p.Intern("b")
+	a, _ := p.Intern("a", true)
+	b, _ := p.Intern("b", true)
 	if a == 0 || b == 0 || a == b {
 		t.Fatalf("Intern returned a=%d, b=%d", a, b)
 	}
-	if p.Intern("a") != a {
+	if id, _ := p.Intern("a", true); id != a {
 		t.Error("Intern(\"a\") second call returned different ID")
 	}
 	if s, ok := p.Lookup(a); s != "a" || !ok {
 		t.Errorf("Lookup(a) = (%q, %v), want (\"a\", true)", s, ok)
 	}
 
-	p.Release(a) // refcount 2 -> 1
+	p.Release(a, true) // refcount 2 -> 1
 	if s, ok := p.Lookup(a); s != "a" || !ok {
 		t.Errorf("Lookup after partial Release = (%q, %v), want (\"a\", true)", s, ok)
 	}
-	p.Release(a) // refcount 1 -> 0
+	p.Release(a, true) // refcount 1 -> 0
 	if _, ok := p.Lookup(a); ok {
 		t.Error("Lookup after full Release ok = true, want false")
 	}
-	if c := p.Intern("c"); c != a {
+	if c, _ := p.Intern("c", true); c != a {
 		t.Errorf("Intern after Release: got %d, want reused %d", c, a)
 	}
 
-	p.Release(99999) // out-of-range must not panic
+	p.Release(99999, true) // out-of-range must not panic
 }
 
 func TestRoundTrip(t *testing.T) {
@@ -58,9 +59,9 @@ func TestRoundTrip(t *testing.T) {
 	strs := []string{"File", strings.Repeat("A", 100_000), "Component", "middle", "Feature"}
 	ids := make([]uint32, len(strs))
 	for i, s := range strs {
-		ids[i] = p.Intern(s)
+		ids[i], _ = p.Intern(s, true)
 	}
-	p.Release(ids[3]) // create a gap
+	p.Release(ids[3], true) // create a gap
 	pool, data, err := stringpool.Encode(p)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
