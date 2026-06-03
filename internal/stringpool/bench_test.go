@@ -28,30 +28,57 @@ func realisticStrings(n int) []string {
 	return out
 }
 
+func BenchmarkSetCodepage(b *testing.B) {
+	for _, n := range benchSizes {
+		strs := realisticStrings(n)
+		for i := range strs {
+			strs[i] += "é" // every string has one non-ASCII rune to exercise the encoder
+		}
+		p, _ := stringpool.New(1252)
+		for _, s := range strs {
+			p.Intern(s, true)
+		}
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := p.SetCodepage(1250); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkIntern(b *testing.B) {
 	for _, n := range benchSizes {
 		strs := realisticStrings(n)
+		for i := range strs {
+			strs[i] += "é" // every string has one non-ASCII rune to exercise validation
+		}
 		b.Run(fmt.Sprintf("new/n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				p, _ := stringpool.New(benchCodepage)
 				for _, s := range strs {
-					p.Intern(s)
+					p.Intern(s, true)
 				}
 			}
 		})
 	}
 	for _, n := range benchSizes {
 		strs := realisticStrings(n)
+		for i := range strs {
+			strs[i] += "é"
+		}
 		b.Run(fmt.Sprintf("dedup/n=%d", n), func(b *testing.B) {
 			p, _ := stringpool.New(benchCodepage)
 			for _, s := range strs {
-				p.Intern(s)
+				p.Intern(s, true)
 			}
 			b.ReportAllocs()
 			for b.Loop() {
 				for _, s := range strs {
-					p.Intern(s)
+					p.Intern(s, true)
 				}
 			}
 		})
@@ -64,7 +91,7 @@ func BenchmarkLookup(b *testing.B) {
 		p, _ := stringpool.New(benchCodepage)
 		ids := make([]uint32, len(strs))
 		for i, s := range strs {
-			ids[i] = p.Intern(s)
+			ids[i] = p.Intern(s, true)
 		}
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
@@ -82,7 +109,7 @@ func BenchmarkEncode(b *testing.B) {
 		strs := realisticStrings(n)
 		p, _ := stringpool.New(benchCodepage)
 		for _, s := range strs {
-			p.Intern(s)
+			p.Intern(s, true)
 		}
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
@@ -98,7 +125,7 @@ func BenchmarkDecode(b *testing.B) {
 		strs := realisticStrings(n)
 		p, _ := stringpool.New(benchCodepage)
 		for _, s := range strs {
-			p.Intern(s)
+			p.Intern(s, true)
 		}
 		pool, data, err := stringpool.Encode(p)
 		if err != nil {
