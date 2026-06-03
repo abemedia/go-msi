@@ -7,12 +7,11 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/abemedia/go-msi/internal/codepage"
 	"golang.org/x/text/transform"
 )
 
 // ErrFormat is returned when the pool or data stream is malformed.
-var ErrFormat = errors.New("stringpool: not a valid string pool")
+var ErrFormat = errors.New("not a valid string pool")
 
 // Decode parses the _StringPool and _StringData streams.
 func Decode(pool, data []byte) (*Pool, error) { //nolint:funlen
@@ -35,7 +34,7 @@ func Decode(pool, data []byte) (*Pool, error) { //nolint:funlen
 	if err != nil {
 		return nil, err
 	}
-	dec := codepage.Encoding(uint16(cp)).NewDecoder()
+	dec := getEncoding(uint16(cp)).NewDecoder()
 
 	decoded := make([]byte, 0, len(data))
 	ends := make([]int, 0, maxLen)
@@ -67,10 +66,10 @@ func Decode(pool, data []byte) (*Pool, error) { //nolint:funlen
 
 		decoded, _, err = transform.Append(dec, decoded, data[off:off+length])
 		if err != nil {
-			return nil, fmt.Errorf("stringpool: decode ID %d in code page %d: %w", len(p.entries)+1, cp, err)
+			return nil, fmt.Errorf("decode ID %d in code page %d: %w", len(p.entries)+1, cp, err)
 		}
 		ends = append(ends, len(decoded))
-		p.entries = append(p.entries, entry{refcount: refs})
+		p.entries = append(p.entries, entry{persistentRefcount: refs})
 		off += length
 	}
 
@@ -90,7 +89,7 @@ func Decode(pool, data []byte) (*Pool, error) { //nolint:funlen
 		end := ends[i]
 		e := &p.entries[i]
 		e.s = all[start:end]
-		if e.refcount != 0 {
+		if e.persistentRefcount != 0 {
 			p.index[e.s] = uint32(i) + 1
 		}
 		start = end

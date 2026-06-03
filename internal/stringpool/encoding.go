@@ -1,5 +1,4 @@
-// Package codepage maps Windows code page numbers to their text encodings.
-package codepage
+package stringpool
 
 import (
 	"golang.org/x/text/encoding"
@@ -11,9 +10,11 @@ import (
 	"golang.org/x/text/encoding/unicode"
 )
 
-// Encoding returns the text encoding for cp, or nil if cp is not implemented.
-func Encoding(cp uint16) encoding.Encoding {
+// getEncoding returns the text encoding for cp, or nil if cp is not implemented.
+func getEncoding(cp uint16) encoding.Encoding { //nolint:funlen
 	switch cp {
+	case 0:
+		return charmap.Windows1252
 	case 1200:
 		return unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM)
 	case 65001:

@@ -16,7 +16,7 @@ func TestDecodeErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Intern("AB")
+	p.Intern("AB", true)
 	pool, data, err := stringpool.Encode(p)
 	if err != nil {
 		t.Fatal(err)
