@@ -1,9 +1,11 @@
 package msidb
 
 import (
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/abemedia/go-cfb"
@@ -75,6 +77,18 @@ func (e *encoder) writeSchemas() error {
 		}
 	}
 
+	// MSI stores _Tables and _Columns sorted by their raw primary keys: the
+	// table name's string ID, then the column number.
+	slices.SortFunc(tablesRecords, func(a, b []uint32) int {
+		return cmp.Compare(a[0], b[0])
+	})
+	slices.SortFunc(columnsRecords, func(a, b []uint32) int {
+		if d := cmp.Compare(a[0], b[0]); d != 0 {
+			return d
+		}
+		return cmp.Compare(a[1], b[1])
+	})
+
 	longRefs := e.db.pool.LongRefs()
 	tablesData, err := encodeTable(tablesRecords, schemaTables, longRefs)
 	if err != nil {
@@ -115,7 +129,7 @@ func (e *encoder) writeTables() error {
 			if err != nil {
 				return fmt.Errorf("table %s: %w", t.name, err)
 			}
-			if err := e.writeStream(tableMarker+streamname.Encode(name), r.bin); err != nil {
+			if err := e.writeStream(streamname.Encode(name), r.bin); err != nil {
 				return fmt.Errorf("table %s: %w", t.name, err)
 			}
 		}

@@ -39,14 +39,14 @@ func TestPackUnpackType(t *testing.T) {
 }
 
 func TestUnpackTypeErrors(t *testing.T) {
-	// Raw _Columns.Type bit-fields: valid bit 0x100, string bit 0x800, size in
-	// bits 0-7.
+	// Raw _Columns.Type bit-fields: persistent bit 0x100, type kind in bits
+	// 10-11, size in bits 0-7.
 	tests := []struct {
 		name string
 		bits uint32
 	}{
-		{"missing valid bit", 0x000},
-		{"string bit without valid bit", 0x800},
+		{"missing persistent bit", 0x000},
+		{"kind bits without persistent bit", 0x800},
 		{"integer size 0", 0x100},
 		{"integer size 3", 0x103},
 		{"integer size 5", 0x105},

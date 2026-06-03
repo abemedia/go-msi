@@ -17,7 +17,8 @@ import (
 type decoder struct {
 	db      *Database
 	tables  map[string]*cfb.Stream
-	streams []*cfb.Stream // non-table CFB streams for _Streams
+	streams []*cfb.Stream
+	byName  map[string]*cfb.Stream
 	schemas map[string][]Column
 }
 
@@ -27,6 +28,7 @@ func decode(r *cfb.Reader) (*Database, error) {
 		db:      &Database{},
 		tables:  make(map[string]*cfb.Stream, len(r.Entries)),
 		streams: make([]*cfb.Stream, 0, len(r.Entries)),
+		byName:  make(map[string]*cfb.Stream, len(r.Entries)),
 	}
 
 	for _, e := range r.Entries {
@@ -38,6 +40,7 @@ func decode(r *cfb.Reader) (*Database, error) {
 			d.tables[streamname.Decode(name)] = s
 		} else {
 			d.streams = append(d.streams, s)
+			d.byName[streamname.Decode(s.Name)] = s
 		}
 	}
 
@@ -218,7 +221,7 @@ func (d *decoder) readTables() error { //nolint:funlen,gocognit
 				if err != nil {
 					return fmt.Errorf("table %s: %w", name, err)
 				}
-				s, ok := d.tables[streamName]
+				s, ok := d.byName[streamName]
 				if !ok {
 					return fmt.Errorf("table %s: missing binary stream %q", name, streamName)
 				}
