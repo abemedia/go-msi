@@ -121,18 +121,6 @@ func (e *encoder) writeTables() error {
 		if err := e.writeTableStream(t.name, stream); err != nil {
 			return fmt.Errorf("write table %s: %w", t.name, err)
 		}
-		for _, r := range t.records {
-			if r.bin == nil {
-				continue
-			}
-			name, err := r.binaryStreamName()
-			if err != nil {
-				return fmt.Errorf("table %s: %w", t.name, err)
-			}
-			if err := e.writeStream(streamname.Encode(name), r.bin); err != nil {
-				return fmt.Errorf("table %s: %w", t.name, err)
-			}
-		}
 	}
 	return nil
 }
@@ -148,7 +136,8 @@ func (e *encoder) writeStreams() error {
 		if !ok {
 			return fmt.Errorf("_Streams: unknown string ID %d", r.fields[0])
 		}
-		if r.bin == nil {
+		src, ok := e.db.streams[name]
+		if !ok {
 			continue
 		}
 		// Names with the '\x05' prefix (e.g. "\x05SummaryInformation") aren't encoded.
@@ -156,7 +145,7 @@ func (e *encoder) writeStreams() error {
 		if !strings.HasPrefix(name, "\x05") {
 			streamName = streamname.Encode(name)
 		}
-		if err := e.writeStream(streamName, r.bin); err != nil {
+		if err := e.writeStream(streamName, src); err != nil {
 			return fmt.Errorf("write stream %s: %w", name, err)
 		}
 	}

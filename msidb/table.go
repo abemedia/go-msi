@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"slices"
 	"sort"
@@ -166,11 +167,16 @@ func (t *Table) Insert(values ...any) (*Record, error) {
 		return nil, newError("insert", t.name, fmt.Errorf("got %d values for %d columns", len(values), len(t.columns)))
 	}
 	r := &Record{table: t, fields: make([]uint32, len(t.columns))}
-	var err error
+	var payload io.Reader
 	for i, v := range values {
-		if r.fields[i], err = toFieldValue(r, i, v); err != nil {
+		fv, rd, err := toFieldValue(r, i, v)
+		if err != nil {
 			r.release()
 			return nil, newError("insert", t.name+"."+t.columns[i].Name, err)
+		}
+		r.fields[i] = fv
+		if rd != nil {
+			payload = rd
 		}
 	}
 	idx, found := slices.BinarySearchFunc(t.records, r, t.comparePK)
@@ -186,7 +192,20 @@ func (t *Table) Insert(values ...any) (*Record, error) {
 		r.release()
 		return nil, err
 	}
+	// Insert the record before staging its stream so createStream finds the
+	// _Streams record when the table being inserted into is _Streams itself.
 	t.records = slices.Insert(t.records, idx, r)
+	if payload != nil {
+		name, err := r.streamName()
+		if err == nil {
+			err = t.db.createStream(name, payload)
+		}
+		if err != nil {
+			t.records = slices.Delete(t.records, idx, idx+1)
+			r.release()
+			return nil, newError("insert", t.name, err)
+		}
+	}
 	return r, nil
 }
 

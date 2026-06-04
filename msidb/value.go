@@ -10,61 +10,44 @@ import (
 )
 
 // toFieldValue converts v to the raw field value for the i'th column of r's
-// table, staging a binary payload into r.bin.
-func toFieldValue(r *Record, i int, v any) (uint32, error) {
+// table. For a binary column it returns the payload as a reader for the caller
+// to stage once the record is committed; the value is not stored here.
+func toFieldValue(r *Record, i int, v any) (uint32, io.Reader, error) {
 	t := r.table
 	c := t.columns[i]
 	if v == nil {
 		if !c.Nullable {
-			return 0, errors.New("NULL not allowed")
+			return 0, nil, errors.New("NULL not allowed")
 		}
-		if c.Type == ColumnBinary {
-			r.bin = nil
-		}
-		return 0, nil
+		return 0, nil, nil
 	}
 	switch c.Type {
 	case ColumnInteger:
-		return intValue(v, c.Size)
+		fv, err := intValue(v, c.Size)
+		return fv, nil, err
 	case ColumnString:
 		s, ok := v.(string)
 		if !ok {
-			return 0, fmt.Errorf("expected string, got %T", v)
+			return 0, nil, fmt.Errorf("expected string, got %T", v)
 		}
 		if c.Size > 0 && utf8.RuneCountInString(s) > c.Size {
-			return 0, fmt.Errorf("length %d exceeds column max %d", utf8.RuneCountInString(s), c.Size)
+			return 0, nil, fmt.Errorf("length %d exceeds column max %d", utf8.RuneCountInString(s), c.Size)
 		}
 		if err := t.db.pool.Validate(s); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
-		return t.db.pool.Intern(s, t.name != systemTableStreams), nil
+		return t.db.pool.Intern(s, t.name != systemTableStreams), nil, nil
 	case ColumnBinary:
-		var rd io.Reader
 		switch x := v.(type) {
 		case []byte:
-			rd = bytes.NewReader(x)
+			return 1, bytes.NewReader(x), nil
 		case io.Reader:
-			rd = x
+			return 1, x, nil
 		default:
-			return 0, fmt.Errorf("expected io.Reader or []byte, got %T", v)
+			return 0, nil, fmt.Errorf("expected io.Reader or []byte, got %T", v)
 		}
-		h, w, err := t.db.blob.Create()
-		if err != nil {
-			return 0, err
-		}
-		if _, err := io.Copy(w, rd); err != nil {
-			_ = w.Close()
-			t.db.blob.Delete(h)
-			return 0, err
-		}
-		if err := w.Close(); err != nil {
-			t.db.blob.Delete(h)
-			return 0, err
-		}
-		r.bin = &blobStreamSource{store: &t.db.blob, handle: h}
-		return 1, nil
 	}
-	return 0, fmt.Errorf("unsupported column type %d", c.Type)
+	return 0, nil, fmt.Errorf("unsupported column type %d", c.Type)
 }
 
 // intValue converts v to the raw field value for a size-byte integer column.

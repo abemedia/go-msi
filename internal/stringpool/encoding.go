@@ -10,7 +10,7 @@ import (
 	"golang.org/x/text/encoding/unicode"
 )
 
-// getEncoding returns the text encoding for cp, or nil if cp is not implemented.
+// getEncoding returns the text encoding for cp, or nil if cp is not supported.
 func getEncoding(cp uint16) encoding.Encoding { //nolint:funlen
 	switch cp {
 	case 0:

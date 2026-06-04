@@ -20,8 +20,9 @@ type Database struct {
 	cfb    *cfb.Reader
 	closer io.Closer
 
-	pool   *stringpool.Pool
-	tables map[string]*Table
+	pool    *stringpool.Pool
+	tables  map[string]*Table
+	streams map[string]streamSource // data streams keyed by MSI name; mirrors _Streams
 
 	blob blobstore.Store // staging store for binary columns; backing file is created lazily
 
@@ -38,9 +39,10 @@ type Database struct {
 // empty. For writes to a file path, use [Create].
 func New(w io.WriteSeeker) *Database {
 	db := &Database{
-		tables: map[string]*Table{},
-		w:      w,
-		dirty:  true,
+		tables:  map[string]*Table{},
+		streams: map[string]streamSource{},
+		w:       w,
+		dirty:   true,
 	}
 
 	// The discarded errors depend only on package constants (a supported code
@@ -77,6 +79,85 @@ func Open(path string) (*Database, error) {
 	db.closer = rc
 	db.path = path
 	return db, nil
+}
+
+// insertStreamsRecord adds a _Streams record for name if none exists yet.
+func (db *Database) insertStreamsRecord(name string) {
+	t := db.tables[systemTableStreams]
+	if id, ok := db.pool.LookupID(name); ok {
+		probe := &Record{table: t, fields: []uint32{id, 1}}
+		if _, found := slices.BinarySearchFunc(t.records, probe, t.comparePK); found {
+			return
+		}
+	}
+	rec := &Record{table: t, fields: []uint32{db.pool.Intern(name, false), 1}}
+	idx, _ := slices.BinarySearchFunc(t.records, rec, t.comparePK)
+	t.records = slices.Insert(t.records, idx, rec)
+}
+
+// removeStreamsRecord removes the _Streams record for name, if present.
+func (db *Database) removeStreamsRecord(name string) {
+	id, ok := db.pool.LookupID(name)
+	if !ok {
+		return
+	}
+	t := db.tables[systemTableStreams]
+	probe := &Record{table: t, fields: []uint32{id, 1}}
+	if idx, found := slices.BinarySearchFunc(t.records, probe, t.comparePK); found {
+		t.records[idx].release()
+		t.records = slices.Delete(t.records, idx, idx+1)
+	}
+}
+
+// createStream stages src into the blob store as the data stream named name,
+// inserting a _Streams record for a new name and freeing the stream it replaces.
+func (db *Database) createStream(name string, src io.Reader) error {
+	h, w, err := db.blob.Create()
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(w, src); err != nil {
+		w.Close()
+		db.blob.Delete(h)
+		return err
+	}
+	if err := w.Close(); err != nil {
+		db.blob.Delete(h)
+		return err
+	}
+	if old, ok := db.streams[name]; ok {
+		old.delete()
+	}
+	db.streams[name] = &blobStreamSource{store: &db.blob, handle: h}
+	db.insertStreamsRecord(name)
+	return nil
+}
+
+// deleteStream frees the data stream named name and removes its _Streams record.
+func (db *Database) deleteStream(name string) {
+	src, ok := db.streams[name]
+	if !ok {
+		return
+	}
+	src.delete()
+	delete(db.streams, name)
+	db.removeStreamsRecord(name)
+}
+
+// renameStream moves the stream named oldName and its _Streams record to
+// newName, keeping the source.
+func (db *Database) renameStream(oldName, newName string) {
+	src, ok := db.streams[oldName]
+	if !ok {
+		return
+	}
+	delete(db.streams, oldName)
+	db.removeStreamsRecord(oldName)
+	if old, ok := db.streams[newName]; ok {
+		old.delete()
+	}
+	db.streams[newName] = src
+	db.insertStreamsRecord(newName)
 }
 
 // Codepage returns the Windows code page used to store string fields.
