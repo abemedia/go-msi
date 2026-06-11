@@ -12,7 +12,7 @@ import (
 )
 
 // ErrUnsupportedCodePage is returned when a pool uses a code page this package does
-// not implement.
+// not support.
 var ErrUnsupportedCodePage = errors.New("unsupported code page")
 
 // longStrFlag is the top bit of the pool's 4-byte header word; set when
@@ -40,7 +40,7 @@ type Pool struct {
 }
 
 // New returns an empty pool that will encode strings in the given Windows
-// code page. Returns an error if cp is not implemented.
+// code page. Returns an error if cp is not supported.
 func New(cp uint16) (*Pool, error) { return newPool(cp, 0, false) }
 
 func newPool(cp uint16, capHint int, longRefs bool) (*Pool, error) {
@@ -60,9 +60,9 @@ func newPool(cp uint16, capHint int, longRefs bool) (*Pool, error) {
 // Codepage returns the Windows code page strings are stored in.
 func (p *Pool) Codepage() uint16 { return p.codepage }
 
-// SetCodepage sets the code page used by [Encode]. Returns an error if
-// cp is not implemented or any persisted string contains a rune not
-// representable in cp.
+// SetCodepage sets the code page used by [Encode].
+// Returns an error if cp is not supported or any persisted string contains a
+// rune not representable in cp.
 func (p *Pool) SetCodepage(cp uint16) error {
 	enc := getEncoding(cp)
 	if enc == nil {
