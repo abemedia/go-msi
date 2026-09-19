@@ -13,11 +13,12 @@ type Persist uintptr
 
 // [Persist] values, matching the MSIDBOPEN_* macros in msiquery.h.
 const (
-	ReadOnly     Persist = 0 // open existing, read-only
-	Transact     Persist = 1 // open existing, changes buffered until Commit
-	Direct       Persist = 2 // open existing, changes written immediately
-	Create       Persist = 3 // create new, buffered
-	CreateDirect Persist = 4 // create new, immediate
+	ReadOnly     Persist = 0  // open existing, read-only
+	Transact     Persist = 1  // open existing, changes buffered until Commit
+	Direct       Persist = 2  // open existing, changes written immediately
+	Create       Persist = 3  // create new, buffered
+	CreateDirect Persist = 4  // create new, immediate
+	PatchFile    Persist = 32 // flag: the file is a patch (.msp)
 )
 
 // Modify controls how [View.Modify] alters the current row.

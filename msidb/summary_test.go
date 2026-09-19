@@ -1,6 +1,7 @@
 package msidb_test
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -36,6 +37,9 @@ func TestSummaryInformation(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	defer db.Close()
+	if _, err := db.SummaryInformation(); !errors.Is(err, msidb.ErrNotExist) {
+		t.Errorf("SummaryInformation before set: err = %v, want ErrNotExist", err)
+	}
 	if err := db.SetSummaryInformation(want); err != nil {
 		t.Fatalf("SummaryInformation: %v", err)
 	}

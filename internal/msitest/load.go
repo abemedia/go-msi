@@ -1,20 +1,21 @@
 package msitest
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
+	"github.com/abemedia/go-cfb/oleps"
 	"github.com/abemedia/go-msi/msidb"
 )
-
-const streamsTable = "_Streams"
 
 // Load reads the MSI at path, returning a [Database] for comparison.
 func Load(path string) (Database, error) {
 	return load(path)
 }
 
-// parseColumn converts an MSI column type string into a [msidb.Column].
 func parseColumn(name, typ string, primaryKey bool) (msidb.Column, error) {
 	if typ == "" {
 		return msidb.Column{}, fmt.Errorf("column %q: empty type", name)
@@ -41,4 +42,34 @@ func parseColumn(name, typ string, primaryKey bool) (msidb.Column, error) {
 	}
 	c.Size = n
 	return c, nil
+}
+
+// parseForceCodepage returns the code page recorded in a _ForceCodepage archive.
+func parseForceCodepage(data []byte) (uint16, error) {
+	for line := range strings.SplitSeq(string(data), "\n") {
+		field, rest, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if ok && rest == "_ForceCodepage" {
+			n, err := strconv.Atoi(field)
+			return uint16(n), err
+		}
+	}
+	return 0, errors.New("code page not found in _ForceCodepage archive")
+}
+
+const streamsTable = "_Streams"
+
+var streamsColumns = []msidb.Column{
+	{Name: "Name", Type: msidb.ColumnString, Size: 62, PrimaryKey: true},
+	{Name: "Data", Type: msidb.ColumnBinary, Nullable: true},
+}
+
+func streamValue(name string, data []byte) (any, error) {
+	if !strings.HasPrefix(name, "\x05") {
+		return data, nil
+	}
+	pss, err := oleps.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode %q: %w", name, err)
+	}
+	return pss, nil
 }

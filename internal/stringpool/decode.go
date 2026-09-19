@@ -90,7 +90,7 @@ func Decode(pool, data []byte) (*Pool, error) {
 		e := &p.entries[i]
 		e.s = all[start:end]
 		if e.persistentRefcount != 0 {
-			if _, dup := p.index[e.s]; dup {
+			if _, ok := p.index[e.s]; ok {
 				return nil, fmt.Errorf("%w: string %q stored twice", ErrFormat, e.s)
 			}
 			p.index[e.s] = uint32(i) + 1
