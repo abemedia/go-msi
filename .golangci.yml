@@ -16,7 +16,6 @@ linters:
     - gochecknoglobals
     - gochecknoinits
     - gocyclo
-    - godox
     - gomodguard # deprecated
     - gosec
     - gosmopolitan
@@ -59,14 +58,9 @@ linters:
 
 formatters:
   enable:
-    - gofmt
     - gofumpt
     - goimports
   settings:
-    gofmt:
-      rewrite-rules:
-        - pattern: interface{}
-          replacement: any
     gofumpt:
       extra:
         group-params: true

@@ -1,20 +1,20 @@
 package msitest
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
+	"strings"
 
+	"github.com/abemedia/go-cfb/oleps"
 	"github.com/abemedia/go-msi/msidb"
 )
-
-const streamsTable = "_Streams"
 
 // Load reads the MSI at path, returning a [Database] for comparison.
 func Load(path string) (Database, error) {
 	return load(path)
 }
 
-// parseColumn converts an MSI column type string into a [msidb.Column].
 func parseColumn(name, typ string, primaryKey bool) (msidb.Column, error) {
 	if typ == "" {
 		return msidb.Column{}, fmt.Errorf("column %q: empty type", name)
@@ -41,4 +41,22 @@ func parseColumn(name, typ string, primaryKey bool) (msidb.Column, error) {
 	}
 	c.Size = n
 	return c, nil
+}
+
+const streamsTable = "_Streams"
+
+var streamsColumns = []msidb.Column{
+	{Name: "Name", Type: msidb.ColumnString, Size: 62, PrimaryKey: true},
+	{Name: "Data", Type: msidb.ColumnBinary, Nullable: true},
+}
+
+func streamValue(name string, data []byte) (any, error) {
+	if !strings.HasPrefix(name, "\x05") {
+		return data, nil
+	}
+	pss, err := oleps.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode %q: %w", name, err)
+	}
+	return pss, nil
 }

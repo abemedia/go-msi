@@ -216,6 +216,9 @@ func (s *scanner) scanQuoted(start int, delim byte) token {
 	from := s.pos
 	for s.pos < len(s.input) {
 		if s.input[s.pos] == delim {
+			if s.pos == from {
+				return s.errorf(start, "empty quoted identifier")
+			}
 			text := s.input[from:s.pos]
 			s.pos++ // closing delimiter
 			return token{Kind: kindIdent, Text: text, Pos: start}

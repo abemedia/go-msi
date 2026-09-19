@@ -1,6 +1,8 @@
 package msidb
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -10,12 +12,8 @@ import (
 	"github.com/abemedia/go-msi/internal/guid"
 )
 
-// summaryStreamName is the stream name of the summary-information
-// property set.
 const summaryStreamName = "\x05SummaryInformation"
 
-// fmtidSummaryInformation is the FMTID of the summary-information
-// property set.
 var fmtidSummaryInformation = guid.MustParse("F29F85E0-4FF9-1068-AB91-08002B27B3D9")
 
 // defaultSystemIdentifier is the OSKind/OSVersion value written into the
@@ -149,10 +147,10 @@ const (
 
 // Source flag bits for [SummaryInformation.WordCount].
 const (
-	SourceShortFileNames    = 0x01 // package uses short filenames only
-	SourceCompressed        = 0x02 // files stored compressed in cabinets
-	SourceAdmin             = 0x04 // package is an administrative install image
-	SourcePasswordProtected = 0x08
+	SourceShortFileNames      = 0x01 // package uses short filenames only
+	SourceCompressed          = 0x02 // files stored compressed in cabinets
+	SourceAdmin               = 0x04 // package is an administrative install image
+	SourceNoElevationRequired = 0x08 // elevated privileges are not required to install
 )
 
 // Property identifiers within the summary-information property set.
@@ -177,17 +175,17 @@ const (
 )
 
 // SummaryInformation returns the database's summary-information property set.
+// It returns an error wrapping [ErrNotExist] if the database has none.
 func (db *Database) SummaryInformation() (SummaryInformation, error) {
-	streams, err := db.Table(systemTableStreams)
+	var data io.ReadSeeker
+	err := db.QueryRow("SELECT Data FROM _Streams WHERE Name = ?", summaryStreamName).Scan(&data)
 	if err != nil {
+		if errors.Is(err, ErrNoRows) {
+			return SummaryInformation{}, newError("read stream", summaryStreamName, ErrNotExist)
+		}
 		return SummaryInformation{}, err
 	}
-	summary, err := streams.Record(summaryStreamName)
-	if err != nil {
-		return SummaryInformation{}, err
-	}
-	data, _ := summary.Field("Data")
-	return unmarshalSummary(data.(io.ReadSeeker))
+	return unmarshalSummary(data)
 }
 
 // SetSummaryInformation replaces the database's summary-information property set.
@@ -197,18 +195,54 @@ func (db *Database) SetSummaryInformation(s SummaryInformation) error {
 		return newError("write stream", summaryStreamName, err)
 	}
 
-	streams, err := db.Table(systemTableStreams)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.closed {
+		return errClosed
+	}
+	src, err := db.stage(bytes.NewReader(data))
 	if err != nil {
-		return err
+		return newError("write stream", summaryStreamName, err)
 	}
-	if record, err := streams.Record(summaryStreamName); err == nil {
-		return record.Set("Data", data)
-	}
-	_, err = streams.Insert(summaryStreamName, data)
-	return err
+	db.addStream(summaryStreamName, src)
+	db.dirty = true
+	return nil
 }
 
-// unmarshalSummary decodes a summary-information property-set stream.
+func marshalSummary(s SummaryInformation) ([]byte, error) {
+	properties := make([]oleps.Property, 0, 17)
+	add := func(present bool, pid uint32, v oleps.Value) {
+		if present {
+			properties = append(properties, oleps.Property{ID: pid, Value: v})
+		}
+	}
+	add(true, pidCodepage, oleps.I2(s.Codepage))
+	add(s.Title != "", pidTitle, oleps.LPSTR(s.Title))
+	add(s.Subject != "", pidSubject, oleps.LPSTR(s.Subject))
+	add(s.Author != "", pidAuthor, oleps.LPSTR(s.Author))
+	add(s.Keywords != "", pidKeywords, oleps.LPSTR(s.Keywords))
+	add(s.Comments != "", pidComments, oleps.LPSTR(s.Comments))
+	add(s.Template != "", pidTemplate, oleps.LPSTR(s.Template))
+	add(s.LastSavedBy != "", pidLastSavedBy, oleps.LPSTR(s.LastSavedBy))
+	add(s.RevisionNumber != "", pidRevisionNumber, oleps.LPSTR(s.RevisionNumber))
+	add(!s.LastPrinted.IsZero(), pidLastPrinted, oleps.FileTime(s.LastPrinted))
+	add(!s.CreateTime.IsZero(), pidCreateTime, oleps.FileTime(s.CreateTime))
+	add(!s.LastSavedTime.IsZero(), pidLastSavedTime, oleps.FileTime(s.LastSavedTime))
+	add(s.PageCount != 0, pidPageCount, oleps.I4(s.PageCount))
+	add(s.WordCount != 0, pidWordCount, oleps.I4(s.WordCount))
+	add(s.CharCount != 0, pidCharCount, oleps.I4(s.CharCount))
+	add(s.CreatingApplication != "", pidCreatingApplication, oleps.LPSTR(s.CreatingApplication))
+	add(s.Security != 0, pidSecurity, oleps.I4(s.Security))
+
+	return oleps.Marshal(oleps.PropertySetStream{
+		SystemIdentifier: defaultSystemIdentifier,
+		PropertySets: []oleps.PropertySet{{
+			FMTID:      fmtidSummaryInformation,
+			Properties: properties,
+		}},
+	})
+}
+
 func unmarshalSummary(r io.ReadSeeker) (SummaryInformation, error) {
 	pss, err := oleps.Decode(r)
 	if err != nil {
@@ -279,39 +313,4 @@ func summaryValue[T any, O oleps.Value](v oleps.Value) (val T, ok bool) {
 		return val, false
 	}
 	return *(*T)(unsafe.Pointer(&o)), true
-}
-
-// marshalSummary encodes s as a summary-information property-set stream.
-func marshalSummary(s SummaryInformation) ([]byte, error) {
-	properties := make([]oleps.Property, 0, 17)
-	add := func(present bool, pid uint32, v oleps.Value) {
-		if present {
-			properties = append(properties, oleps.Property{ID: pid, Value: v})
-		}
-	}
-	add(true, pidCodepage, oleps.I2(s.Codepage))
-	add(s.Title != "", pidTitle, oleps.LPSTR(s.Title))
-	add(s.Subject != "", pidSubject, oleps.LPSTR(s.Subject))
-	add(s.Author != "", pidAuthor, oleps.LPSTR(s.Author))
-	add(s.Keywords != "", pidKeywords, oleps.LPSTR(s.Keywords))
-	add(s.Comments != "", pidComments, oleps.LPSTR(s.Comments))
-	add(s.Template != "", pidTemplate, oleps.LPSTR(s.Template))
-	add(s.LastSavedBy != "", pidLastSavedBy, oleps.LPSTR(s.LastSavedBy))
-	add(s.RevisionNumber != "", pidRevisionNumber, oleps.LPSTR(s.RevisionNumber))
-	add(!s.LastPrinted.IsZero(), pidLastPrinted, oleps.FileTime(s.LastPrinted))
-	add(!s.CreateTime.IsZero(), pidCreateTime, oleps.FileTime(s.CreateTime))
-	add(!s.LastSavedTime.IsZero(), pidLastSavedTime, oleps.FileTime(s.LastSavedTime))
-	add(s.PageCount != 0, pidPageCount, oleps.I4(s.PageCount))
-	add(s.WordCount != 0, pidWordCount, oleps.I4(s.WordCount))
-	add(s.CharCount != 0, pidCharCount, oleps.I4(s.CharCount))
-	add(s.CreatingApplication != "", pidCreatingApplication, oleps.LPSTR(s.CreatingApplication))
-	add(s.Security != 0, pidSecurity, oleps.I4(s.Security))
-
-	return oleps.Marshal(oleps.PropertySetStream{
-		SystemIdentifier: defaultSystemIdentifier,
-		PropertySets: []oleps.PropertySet{{
-			FMTID:      fmtidSummaryInformation,
-			Properties: properties,
-		}},
-	})
 }

@@ -3,7 +3,6 @@
 package msitest
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -11,14 +10,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/abemedia/go-cfb/oleps"
 	"github.com/abemedia/go-msi/internal/msiquery"
 	"github.com/abemedia/go-msi/msidb"
 )
 
 // load reads the MSI at path using msi.dll.
 func load(path string) (Database, error) {
-	d, err := msiquery.OpenDatabase(path, msiquery.ReadOnly)
+	persist := msiquery.ReadOnly
+	if strings.EqualFold(filepath.Ext(path), ".msp") {
+		persist |= msiquery.PatchFile
+	}
+	d, err := msiquery.OpenDatabase(path, persist)
 	if err != nil {
 		return Database{}, err
 	}
@@ -34,11 +36,7 @@ func load(path string) (Database, error) {
 	}
 	tables := make(map[string]Table, len(names))
 	for _, name := range names {
-		read := readTable
-		if name == streamsTable {
-			read = readStreams
-		}
-		tbl, err := read(d, name)
+		tbl, err := readTable(d, name)
 		if err != nil {
 			return Database{}, fmt.Errorf("table %s: %w", name, err)
 		}
@@ -47,67 +45,6 @@ func load(path string) (Database, error) {
 	return Database{Codepage: cp, Tables: tables}, nil
 }
 
-// readStreams reads the _Streams table.
-func readStreams(d msiquery.Database, _ string) (Table, error) {
-	cols := []msidb.Column{
-		{Name: "Name", Type: msidb.ColumnString, Size: 62, PrimaryKey: true},
-		{Name: "Data", Type: msidb.ColumnBinary, Nullable: true},
-	}
-	v, err := d.OpenView("SELECT `Name`, `Data` FROM `_Streams`")
-	if err != nil {
-		return Table{}, err
-	}
-	defer v.Close()
-	if err := v.Execute(0); err != nil {
-		return Table{}, err
-	}
-
-	var records []map[string]any
-	for {
-		rec, err := v.Fetch()
-		if err != nil {
-			return Table{}, err
-		}
-		if rec == 0 {
-			break
-		}
-		row, err := streamRecord(rec)
-		rec.Close()
-		if err != nil {
-			return Table{}, err
-		}
-		records = append(records, row)
-	}
-	return Table{Columns: cols, Records: records}, nil
-}
-
-// streamRecord reads one _Streams record, decoding property-set streams.
-func streamRecord(rec msiquery.Record) (map[string]any, error) {
-	name, err := rec.GetString(1)
-	if err != nil {
-		return nil, err
-	}
-	row := map[string]any{"Name": name, "Data": nil}
-	if rec.IsNull(2) {
-		return row, nil
-	}
-	data, err := readStream(rec, 2)
-	if err != nil {
-		return nil, err
-	}
-	if strings.HasPrefix(name, "\x05") {
-		pss, err := oleps.Decode(bytes.NewReader(data))
-		if err != nil {
-			return nil, fmt.Errorf("decode %q: %w", name, err)
-		}
-		row["Data"] = pss
-		return row, nil
-	}
-	row["Data"] = data
-	return row, nil
-}
-
-// codepage returns the database code page.
 func codepage(d msiquery.Database) (uint16, error) {
 	dir, err := os.MkdirTemp("", "msicp")
 	if err != nil {
@@ -164,6 +101,9 @@ func tableNames(d msiquery.Database) ([]string, error) {
 }
 
 func readTable(d msiquery.Database, name string) (Table, error) {
+	if name == streamsTable {
+		return readStreams(d)
+	}
 	v, err := d.OpenView("SELECT * FROM `" + name + "`")
 	if err != nil {
 		return Table{}, err
@@ -194,6 +134,55 @@ func readTable(d msiquery.Database, name string) (Table, error) {
 		records = append(records, row)
 	}
 	return Table{Columns: cols, Records: records}, nil
+}
+
+func readStreams(d msiquery.Database) (Table, error) {
+	v, err := d.OpenView("SELECT `Name`, `Data` FROM `_Streams`")
+	if err != nil {
+		return Table{}, err
+	}
+	defer v.Close()
+	if err := v.Execute(0); err != nil {
+		return Table{}, err
+	}
+
+	var records []map[string]any
+	for {
+		rec, err := v.Fetch()
+		if err != nil {
+			return Table{}, err
+		}
+		if rec == 0 {
+			break
+		}
+		row, err := streamRecord(rec)
+		rec.Close()
+		if err != nil {
+			return Table{}, err
+		}
+		records = append(records, row)
+	}
+	return Table{Columns: streamsColumns, Records: records}, nil
+}
+
+// streamRecord reads one _Streams record, decoding property-set streams.
+func streamRecord(rec msiquery.Record) (map[string]any, error) {
+	name, err := rec.GetString(1)
+	if err != nil {
+		return nil, err
+	}
+	row := map[string]any{"Name": name, "Data": nil}
+	if rec.IsNull(2) {
+		return row, nil
+	}
+	data, err := readStream(rec, 2)
+	if err != nil {
+		return nil, err
+	}
+	if row["Data"], err = streamValue(name, data); err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 func columns(d msiquery.Database, v msiquery.View, table string) ([]msidb.Column, error) {

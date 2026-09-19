@@ -40,7 +40,7 @@ type Pool struct {
 }
 
 // New returns an empty pool that will encode strings in the given Windows
-// code page. Returns an error if cp is not supported.
+// code page. It returns an error if cp is not supported.
 func New(cp uint16) (*Pool, error) { return newPool(cp, 0, false) }
 
 func newPool(cp uint16, capHint int, longRefs bool) (*Pool, error) {
@@ -61,8 +61,8 @@ func newPool(cp uint16, capHint int, longRefs bool) (*Pool, error) {
 func (p *Pool) Codepage() uint16 { return p.codepage }
 
 // SetCodepage sets the code page used by [Encode].
-// Returns an error if cp is not supported or any persisted string contains a
-// rune not representable in cp.
+// It returns an error if cp is not supported or any persisted string contains
+// a rune not representable in cp.
 func (p *Pool) SetCodepage(cp uint16) error {
 	enc := getEncoding(cp)
 	if enc == nil {

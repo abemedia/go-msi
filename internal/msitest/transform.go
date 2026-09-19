@@ -4,8 +4,6 @@ package msitest
 
 import (
 	"io"
-	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -44,11 +42,8 @@ func Transform() cmp.Option {
 				return v
 			}),
 		),
-		// msidump doesn't sort streams, so sort by name when not on Windows.
+		// _Streams order is undefined and differs between msi.dll, msidump and msidb.
 		cmp.FilterPath(func(p cmp.Path) bool {
-			if runtime.GOOS == "windows" {
-				return false
-			}
 			last, ok := p.Last().(cmp.StructField)
 			if !ok || last.Name() != "Records" {
 				return false
@@ -64,7 +59,7 @@ func Transform() cmp.Option {
 		})),
 		cmp.Transformer("oleps.FileTime", transformFileTime),
 		cmpopts.IgnoreFields(oleps.PropertySetStream{}, "SystemIdentifier"), // implementation-specific
-		cmpopts.EquateEmpty(),
+		cmpopts.IgnoreFields(msidb.Column{}, "Table"),                       // query-result metadata, not in the oracle
 	}
 }
 
@@ -74,7 +69,7 @@ type Database struct {
 	Tables   map[string]Table
 }
 
-// Table is a comparable snapshot of an [msidb.Table].
+// Table is a comparable snapshot of one table of an [msidb.Database].
 type Table struct {
 	Columns []msidb.Column
 	Records []map[string]any
@@ -85,34 +80,66 @@ func transformDatabase(db *msidb.Database) Database {
 		Codepage: db.Codepage(),
 		Tables:   make(map[string]Table),
 	}
-	for t := range db.Tables() {
-		cols := slices.Collect(t.Columns())
-		records := make([]map[string]any, 0, t.Len())
-		for r := range t.Records() {
-			rec := make(map[string]any, len(cols))
-			for _, c := range cols {
-				v, err := r.Field(c.Name)
+	// _Tables lists only user tables; _Streams is queried explicitly.
+	for _, name := range append(userTables(db), streamsTable) {
+		s.Tables[name] = transformTable(db, name)
+	}
+	return s
+}
+
+func userTables(db *msidb.Database) []string {
+	rows, err := db.Query("SELECT Name FROM _Tables")
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			panic(err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		panic(err)
+	}
+	return names
+}
+
+func transformTable(db *msidb.Database, name string) Table {
+	rows, err := db.Query("SELECT * FROM `" + name + "`")
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+	cols := rows.Columns()
+	var records []map[string]any
+	for rows.Next() {
+		vals, err := rows.Values()
+		if err != nil {
+			panic(err)
+		}
+		rec := make(map[string]any, len(cols))
+		for i, c := range cols {
+			rec[c.Name] = vals[i]
+		}
+
+		if name == streamsTable && strings.HasPrefix(rec["Name"].(string), "\x05") {
+			if rs, ok := rec["Data"].(io.ReadSeeker); ok {
+				pss, err := oleps.Decode(rs)
 				if err != nil {
 					panic(err)
 				}
-				rec[c.Name] = v
+				rec["Data"] = pss
 			}
-
-			// Parse streams with CDFV2 property-set stream prefix.
-			if t.Name() == "_Streams" && strings.HasPrefix(rec["Name"].(string), "\x05") {
-				if rs, ok := rec["Data"].(io.ReadSeeker); ok {
-					pss, err := oleps.Decode(rs)
-					if err != nil {
-						panic(err)
-					}
-					rec["Data"] = pss
-				}
-			}
-			records = append(records, rec)
 		}
-		s.Tables[t.Name()] = Table{Columns: cols, Records: records}
+		records = append(records, rec)
 	}
-	return s
+	if err := rows.Err(); err != nil {
+		panic(err)
+	}
+	return Table{Columns: cols, Records: records}
 }
 
 func transformReadSeeker(rs io.ReadSeeker) []byte {

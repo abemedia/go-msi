@@ -2,7 +2,6 @@ package msidb
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -13,59 +12,49 @@ import (
 	"github.com/abemedia/go-msi/internal/stringpool"
 )
 
-// decoder reads an MSI database from a CFB reader into a Database.
-type decoder struct {
-	db      *Database
-	tables  map[string]*cfb.Stream
-	streams []*cfb.Stream
-	schemas map[string][]Column
-}
-
-// decode parses r into a Database.
+// decode parses r into a Database. Any damage fails with [ErrFormat].
 func decode(r *cfb.Reader) (*Database, error) {
-	d := decoder{
-		db:      &Database{streams: map[string]streamSource{}},
-		tables:  make(map[string]*cfb.Stream, len(r.Entries)),
-		streams: make([]*cfb.Stream, 0, len(r.Entries)),
-	}
+	db := newDatabase()
+	db.clsid = r.CLSID
 
+	tableStreams := make(map[string]*cfb.Stream, len(r.Entries))
+	var dataStreams []*cfb.Stream
 	for _, e := range r.Entries {
-		s, ok := e.(*cfb.Stream)
-		if !ok {
-			continue
-		}
-		if name, ok := strings.CutPrefix(s.Name, tableMarker); ok {
-			d.tables[streamname.Decode(name)] = s
-		} else {
-			d.streams = append(d.streams, s)
+		switch e := e.(type) {
+		case *cfb.Storage:
+			db.storages = append(db.storages, e)
+		case *cfb.Stream:
+			if strings.HasPrefix(e.Name, tableMarker) {
+				tableStreams[e.Name] = e
+			} else {
+				dataStreams = append(dataStreams, e)
+			}
 		}
 	}
 
-	if err := d.readPool(); err != nil {
+	if err := readPool(db, tableStreams); err != nil {
 		return nil, err
 	}
-	if err := d.readSchemas(); err != nil {
+	if err := readCatalog(db, tableStreams); err != nil {
 		return nil, err
 	}
-	if err := d.readTables(); err != nil {
+	if err := readTables(db, tableStreams); err != nil {
 		return nil, err
 	}
-	if err := d.readStreams(); err != nil {
+	if err := readStreams(db, dataStreams); err != nil {
 		return nil, err
 	}
-	return d.db, nil
+	return db, nil
 }
 
-// readPool decodes _StringPool and _StringData into d.db.pool.
-func (d *decoder) readPool() error {
-	poolStream, ok := d.tables[stringpoolName]
-	if !ok {
-		return errors.New("missing _StringPool stream")
+func readPool(db *Database, tableStreams map[string]*cfb.Stream) error {
+	poolStream, okPool := tableStreams[tableStreamName(stringPoolName)]
+	dataStream, okData := tableStreams[tableStreamName(stringDataName)]
+	if !okPool || !okData {
+		return fmt.Errorf("%w: missing string pool", ErrFormat)
 	}
-	dataStream, ok := d.tables[stringdataName]
-	if !ok {
-		return errors.New("missing _StringData stream")
-	}
+	delete(tableStreams, tableStreamName(stringPoolName))
+	delete(tableStreams, tableStreamName(stringDataName))
 	poolBytes, err := readAll(poolStream)
 	if err != nil {
 		return fmt.Errorf("string pool: %w", err)
@@ -74,183 +63,135 @@ func (d *decoder) readPool() error {
 	if err != nil {
 		return fmt.Errorf("string pool: %w", err)
 	}
-	pool, err := stringpool.Decode(poolBytes, dataBytes)
-	if err != nil {
-		return fmt.Errorf("string pool: %w", err)
+	if db.pool, err = stringpool.Decode(poolBytes, dataBytes); err != nil {
+		return fmt.Errorf("%w: string pool: %w", ErrFormat, err)
 	}
-	d.db.pool = pool
 	return nil
 }
 
-// readSchemas decodes _Tables and _Columns.
-func (d *decoder) readSchemas() error { //nolint:funlen
-	tablesStream, ok := d.tables[systemTableTables]
-	if !ok {
-		return errors.New("missing _Tables stream")
-	}
-	columnsStream, ok := d.tables[systemTableColumns]
-	if !ok {
-		return errors.New("missing _Columns stream")
-	}
-	tablesData, err := readAll(tablesStream)
-	if err != nil {
-		return fmt.Errorf("_Tables: %w", err)
-	}
-	columnsData, err := readAll(columnsStream)
-	if err != nil {
-		return fmt.Errorf("_Columns: %w", err)
-	}
-	longRefs := d.db.pool.LongRefs()
-	tablesRecords, err := decodeTable(tablesData, schemaTables, longRefs)
-	if err != nil {
-		return fmt.Errorf("decode _Tables: %w", err)
-	}
-	columnsRecords, err := decodeTable(columnsData, schemaColumns, longRefs)
-	if err != nil {
-		return fmt.Errorf("decode _Columns: %w", err)
-	}
-
-	schemas := make(map[string][]Column, len(tablesRecords))
-	for _, rec := range tablesRecords {
-		id := rec[0]
-		name, ok := d.db.pool.Lookup(id)
+func readCatalog(db *Database, tableStreams map[string]*cfb.Stream) error {
+	for _, name := range []string{systemTableTables, systemTableColumns} {
+		s, ok := tableStreams[tableStreamName(name)]
 		if !ok {
-			return fmt.Errorf("_Tables.Name: unknown string ID %d", id)
-		}
-		schemas[name] = nil
-	}
-
-	for _, rec := range columnsRecords {
-		tableID, num, colID, typ := rec[0], rec[1], rec[2], rec[3]
-		tableName, ok := d.db.pool.Lookup(tableID)
-		if !ok {
-			return fmt.Errorf("_Columns.Table: unknown string ID %d", tableID)
-		}
-		if num == 0 {
-			return errors.New("_Columns.Number: null value")
-		}
-		number := decodeInt(num, 2)
-		if number < 1 {
-			return fmt.Errorf("_Columns.Number: invalid value %d", number)
-		}
-		colName, ok := d.db.pool.Lookup(colID)
-		if !ok {
-			return fmt.Errorf("_Columns.Name: unknown string ID %d", colID)
-		}
-		if typ == 0 {
-			return fmt.Errorf("_Columns.Type: null value for %s.%s", tableName, colName)
-		}
-		col, err := unpackType(uint32(decodeInt(typ, 2)))
-		if err != nil {
-			return fmt.Errorf("_Columns %s.%s: %w", tableName, colName, err)
-		}
-		col.Name = colName
-
-		cols, ok := schemas[tableName]
-		if !ok {
-			return fmt.Errorf("_Columns.Table: unknown table %q", tableName)
-		}
-		if number > len(cols) {
-			cols = append(cols, make([]Column, number-len(cols))...)
-		}
-		cols[number-1] = col
-		schemas[tableName] = cols
-	}
-
-	d.schemas = schemas
-	d.db.tables = make(map[string]*Table, len(schemas))
-	return nil
-}
-
-// readTables decodes each user table's records.
-func (d *decoder) readTables() error { //nolint:funlen,gocognit
-	longRefs := d.db.pool.LongRefs()
-	for name, cols := range d.schemas {
-		t, err := newTable(d.db, name, cols)
-		if err != nil {
-			return err
-		}
-		s, ok := d.tables[name]
-		if !ok || s.Size == 0 {
-			d.db.tables[name] = t
 			continue
 		}
+		delete(tableStreams, tableStreamName(name))
+		t := db.tables[name]
+		data, err := readAll(s)
+		if err != nil {
+			return fmt.Errorf("%w: %s: %w", ErrFormat, name, err)
+		}
+		if t.records, err = decodeTable(db, data, t.cols); err != nil {
+			return fmt.Errorf("%w: %s: %w", ErrFormat, name, err)
+		}
+		slices.SortStableFunc(t.records, t.compareKeys)
+	}
+
+	// Anything the file holds is persistent, whatever its bit says.
+	for _, rec := range db.tables[systemTableColumns].records {
+		if rec[columnsType] != 0 {
+			rec[columnsType] |= typePersistent
+		}
+	}
+	return nil
+}
+
+func readTables(db *Database, tableStreams map[string]*cfb.Stream) error {
+	for _, rec := range db.tables[systemTableTables].records {
+		name, _ := db.pool.Lookup(rec[0])
+		if name == "" {
+			return fmt.Errorf("%w: _Tables record has no name", ErrFormat)
+		}
+		if isReservedName(name) {
+			return fmt.Errorf("%w: _Tables record for reserved name %q", ErrFormat, name)
+		}
+		if _, ok := db.tables[name]; ok {
+			return fmt.Errorf("%w: table %s has more than one _Tables record", ErrFormat, name)
+		}
+		t, err := db.deriveTable(name)
+		if err != nil {
+			return fmt.Errorf("%w: table %s: %w", ErrFormat, name, err)
+		}
+		db.tables[name] = t
+		s, ok := tableStreams[tableStreamName(name)]
+		if !ok {
+			continue
+		}
+		delete(tableStreams, tableStreamName(name))
 		data, err := readAll(s)
 		if err != nil {
 			return fmt.Errorf("table %s: %w", name, err)
 		}
-		records, err := decodeTable(data, t.columns, longRefs)
-		if err != nil {
-			return fmt.Errorf("table %s: %w", name, err)
+		if t.records, err = decodeTable(db, data, t.cols); err != nil {
+			return fmt.Errorf("%w: table %s: %w", ErrFormat, name, err)
 		}
-		t.records = make([]*Record, len(records))
-		for i, fields := range records {
-			t.records[i] = &Record{table: t, fields: fields}
-		}
-		slices.SortFunc(t.records, t.comparePK)
-		for ri, r := range t.records {
-			if ri > 0 && len(t.primary) > 0 && t.comparePK(t.records[ri-1], r) == 0 {
-				return fmt.Errorf("table %s: duplicate primary key in record %d", name, ri)
-			}
-			lastBin := -1
-			for ci, c := range t.columns {
-				fv := r.fields[ci]
-				if fv == 0 {
-					if !c.Nullable {
-						return fmt.Errorf("table %s: record %d col %s: unexpected NULL in non-nullable column", name, ri, c.Name)
-					}
-					continue
-				}
-				switch c.Type {
-				case ColumnString:
-					if _, ok := t.db.pool.Lookup(fv); !ok {
-						return fmt.Errorf("table %s: record %d col %s: unknown string ID %d", name, ri, c.Name, fv)
-					}
-				case ColumnBinary:
-					if lastBin >= 0 {
-						r.fields[lastBin] = 0
-					}
-					lastBin = ci
-				}
+		if len(t.keys) > 0 {
+			dup := false
+			slices.SortFunc(t.records, func(a, b []uint32) int {
+				d := t.compareKeys(a, b)
+				dup = dup || d == 0
+				return d
+			})
+			if dup {
+				return fmt.Errorf("%w: table %s: duplicate primary key", ErrFormat, name)
 			}
 		}
-		d.db.tables[name] = t
+	}
+	for _, rec := range db.tables[systemTableColumns].records {
+		name, _ := db.pool.Lookup(rec[columnsTable])
+		if _, ok := db.tables[name]; !ok || isReservedName(name) {
+			return fmt.Errorf("%w: _Columns record for %q has no _Tables record", ErrFormat, name)
+		}
+	}
+	for name := range tableStreams {
+		name = streamname.Decode(strings.TrimPrefix(name, tableMarker))
+		return fmt.Errorf("%w: table stream %s has no _Tables record", ErrFormat, name)
 	}
 	return nil
 }
 
-// readStreams synthesises the _Streams system table from every named
-// CFB stream that isn't a table-content stream.
-func (d *decoder) readStreams() error {
-	t, err := newTable(d.db, systemTableStreams, schemaStreams)
-	if err != nil {
-		return err
-	}
-	t.records = make([]*Record, 0, len(d.streams))
-	for _, s := range d.streams {
+// readStreams registers each data stream in _Streams under its decoded name.
+func readStreams(db *Database, dataStreams []*cfb.Stream) error {
+	st := db.tables[systemTableStreams]
+	for _, s := range dataStreams {
 		name := streamname.Decode(s.Name)
-		t.records = append(t.records, &Record{
-			table:  t,
-			fields: []uint32{d.db.pool.Intern(name, false), 1},
-		})
-		d.db.streams[name] = &cfbStreamSource{s: s}
+		id := db.pool.Intern(name, false)
+		if old, dup := db.sources[id]; dup {
+			return fmt.Errorf("%w: streams %q and %q both decode to %q", ErrFormat, old.(*cfbStreamSource).s.Name, s.Name, name)
+		}
+		st.records = append(st.records, []uint32{id, 1})
+		db.sources[id] = &cfbStreamSource{s: s}
 	}
-	slices.SortFunc(t.records, t.comparePK)
-	d.db.tables[systemTableStreams] = t
+	slices.SortStableFunc(st.records, st.compareKeys)
 	return nil
 }
 
-// decodeTable parses a column-major table stream into per-record raw field values.
-func decodeTable(stream []byte, schema []Column, longRefs bool) ([][]uint32, error) {
+// decodeTable parses a table stream, checking string cells against the pool.
+func decodeTable(db *Database, data []byte, schema []Column) ([][]uint32, error) {
+	records, err := decodeRecords(data, schema, db.pool.LongRefs())
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range records {
+		for i, c := range schema {
+			if c.Type == ColumnString && rec[i] != 0 {
+				if _, ok := db.pool.Lookup(rec[i]); !ok {
+					return nil, fmt.Errorf("unknown string id %d in column %q", rec[i], c.Name)
+				}
+			}
+		}
+	}
+	return records, nil
+}
+
+// decodeRecords parses a column-major table stream to per-record raw cells.
+func decodeRecords(stream []byte, schema []Column, longRefs bool) ([][]uint32, error) {
 	widths, recordSize := columnWidths(schema, longRefs)
 	if recordSize == 0 {
 		return nil, nil
 	}
 	if len(stream)%recordSize != 0 {
-		return nil, fmt.Errorf(
-			"%w: table stream length %d not a multiple of record size %d",
-			ErrFormat, len(stream), recordSize,
-		)
+		return nil, fmt.Errorf("stream length %d not a multiple of record size %d", len(stream), recordSize)
 	}
 	recordCount := len(stream) / recordSize
 	if recordCount == 0 {
@@ -278,14 +219,6 @@ func decodeTable(stream []byte, schema []Column, longRefs bool) ([][]uint32, err
 		pos += recordCount * w
 	}
 	return out, nil
-}
-
-// decodeInt returns the value of a raw size-byte integer field value.
-func decodeInt(raw uint32, size int) int {
-	if size == 2 {
-		return int(int16(uint16(raw) ^ 0x8000))
-	}
-	return int(int32(raw ^ 0x80000000))
 }
 
 // readAll returns the full contents of s, or nil if s is nil or zero-length.

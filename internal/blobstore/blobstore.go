@@ -20,7 +20,7 @@ type Handle uint32
 type Store struct {
 	once sync.Once
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	err     error // nil until init fails or Close runs; then the store is unusable
 	file    *os.File
 	chains  map[Handle][]extent
@@ -37,6 +37,7 @@ type extent struct {
 var (
 	errClosed   = errors.New("closed")
 	errNotFound = errors.New("not found")
+	errDeleted  = errors.New("deleted")
 )
 
 // init creates the backing file and registers the GC cleanup hook on the
@@ -93,8 +94,8 @@ func (s *Store) Create() (Handle, io.WriteCloser, error) {
 // Open returns a reader over the blob identified by h. The returned
 // reader stays valid until h is deleted or the store is closed.
 func (s *Store) Open(h Handle) (io.ReadSeeker, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -102,7 +103,11 @@ func (s *Store) Open(h Handle) (io.ReadSeeker, error) {
 	if !ok {
 		return nil, errNotFound
 	}
-	return newBlobReader(s.file, chain), nil
+	var size int64
+	for _, e := range chain {
+		size += e.length
+	}
+	return &blobReader{s: s, h: h, size: size}, nil
 }
 
 // Delete drops the blob identified by h and returns its extents to the
@@ -211,32 +216,34 @@ func (w *writer) Close() error {
 	return nil
 }
 
-// blobReader is an io.ReadSeeker over a blob's chain of extents in one file.
+// blobReader is an io.ReadSeeker over a blob's chain of extents.
 type blobReader struct {
-	file    *os.File
-	extents []extent
-	pos     int64
-	size    int64
-}
-
-func newBlobReader(file *os.File, extents []extent) *blobReader {
-	var size int64
-	for _, e := range extents {
-		size += e.length
-	}
-	return &blobReader{file: file, extents: extents, size: size}
+	s    *Store
+	h    Handle
+	pos  int64
+	size int64
 }
 
 func (r *blobReader) Read(p []byte) (int, error) {
 	if r.pos >= r.size {
 		return 0, io.EOF
 	}
+	// Read under the lock so a concurrent Delete can't reuse these extents.
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	if r.s.err != nil {
+		return 0, r.s.err
+	}
+	chain, ok := r.s.chains[r.h]
+	if !ok {
+		return 0, errDeleted
+	}
 	pos := r.pos
-	for _, e := range r.extents {
+	for _, e := range chain {
 		if pos < e.length {
 			avail := e.length - pos
 			chunk := min(int64(len(p)), avail)
-			n, err := r.file.ReadAt(p[:chunk], e.offset+pos)
+			n, err := r.s.file.ReadAt(p[:chunk], e.offset+pos)
 			r.pos += int64(n)
 			return n, err
 		}

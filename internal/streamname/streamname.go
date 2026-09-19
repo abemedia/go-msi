@@ -17,6 +17,9 @@ const (
 	pairBase   = 0x3800 // two symbols: pairBase + symbol1 + symbol2<<symbolBits
 )
 
+// Reserved reports whether [Decode] rewrites r.
+func Reserved(r rune) bool { return r >= pairBase && r < singleBase+symbolCount }
+
 // EncodedLen returns the number of UTF-16 code units in the result of [Encode].
 func EncodedLen(s string) int {
 	n := 0

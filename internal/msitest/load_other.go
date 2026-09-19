@@ -3,7 +3,6 @@
 package msitest
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/abemedia/go-cfb/oleps"
 	"github.com/abemedia/go-msi/msidb"
 )
 
@@ -117,8 +115,8 @@ func parseIDT(path, dir string) (string, Table, error) {
 	return header[0], Table{Columns: cols, Records: records}, nil
 }
 
-// idtValue converts one .idt field to its [msidb.Record.Field] representation:
-// nil, int, []byte for a referenced stream file, or the raw string.
+// idtValue converts one .idt field to the value [msidb.Rows.Values] would
+// yield: nil, int, []byte for a referenced stream file, or the raw string.
 func idtValue(c msidb.Column, raw, dir string) (any, error) {
 	if raw == "" {
 		return nil, nil //nolint:nilnil
@@ -137,14 +135,10 @@ func idtValue(c msidb.Column, raw, dir string) (any, error) {
 
 // readStreamFiles builds the _Streams table from msidump's extracted streams.
 func readStreamFiles(dir string) (Table, error) {
-	cols := []msidb.Column{
-		{Name: "Name", Type: msidb.ColumnString, Size: 62, PrimaryKey: true},
-		{Name: "Data", Type: msidb.ColumnBinary, Nullable: true},
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Table{Columns: cols}, nil
+			return Table{Columns: streamsColumns}, nil
 		}
 		return Table{}, err
 	}
@@ -157,17 +151,13 @@ func readStreamFiles(dir string) (Table, error) {
 		if err != nil {
 			return Table{}, err
 		}
-		var value any = data
-		if strings.HasPrefix(e.Name(), "\x05") {
-			pss, err := oleps.Decode(bytes.NewReader(data))
-			if err != nil {
-				return Table{}, fmt.Errorf("decode %q: %w", e.Name(), err)
-			}
-			value = pss
+		value, err := streamValue(e.Name(), data)
+		if err != nil {
+			return Table{}, err
 		}
 		records = append(records, map[string]any{"Name": e.Name(), "Data": value})
 	}
-	return Table{Columns: cols, Records: records}, nil
+	return Table{Columns: streamsColumns, Records: records}, nil
 }
 
 // forceCodepage reads the database code page from the _ForceCodepage archive.

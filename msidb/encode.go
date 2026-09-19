@@ -1,7 +1,7 @@
 package msidb
 
 import (
-	"cmp"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -13,26 +13,24 @@ import (
 	"github.com/abemedia/go-msi/internal/stringpool"
 )
 
-// encoder writes a Database to a CFB writer.
 type encoder struct {
 	db  *Database
 	cw  *cfb.Writer
 	buf []byte // reused by io.CopyBuffer
 }
 
-// encode serialises db to ws as an MSI compound file.
 func encode(ws io.WriteSeeker, db *Database) error {
 	e := encoder{
 		db:  db,
 		cw:  cfb.NewWriterV4(ws),
 		buf: make([]byte, 32*1024),
 	}
-	e.cw.CLSID = installerCLSID
+	e.cw.CLSID = db.clsid
 
 	if err := e.writePool(); err != nil {
 		return err
 	}
-	if err := e.writeSchemas(); err != nil {
+	if err := e.writeCatalog(); err != nil {
 		return err
 	}
 	if err := e.writeTables(); err != nil {
@@ -41,157 +39,173 @@ func encode(ws io.WriteSeeker, db *Database) error {
 	if err := e.writeStreams(); err != nil {
 		return err
 	}
+	if err := e.writeStorages(); err != nil {
+		return err
+	}
 	return e.cw.Close()
 }
 
-// writePool emits _StringPool and _StringData.
 func (e *encoder) writePool() error {
 	poolData, dataData, err := stringpool.Encode(e.db.pool)
 	if err != nil {
 		return fmt.Errorf("pool encode: %w", err)
 	}
-	if err := e.writeTableStream(stringpoolName, poolData); err != nil {
+	if err := e.writeTableStream(stringPoolName, poolData); err != nil {
 		return err
 	}
-	return e.writeTableStream(stringdataName, dataData)
+	return e.writeTableStream(stringDataName, dataData)
 }
 
-// writeSchemas emits _Tables and _Columns.
-func (e *encoder) writeSchemas() error {
-	tablesRecords := make([][]uint32, 0, len(e.db.tables))
-	var columnsRecords [][]uint32
-	for t := range e.db.Tables() {
-		if t.name == systemTableStreams {
-			continue
-		}
-		tableID, _ := e.db.pool.LookupID(t.name)
-		tablesRecords = append(tablesRecords, []uint32{tableID})
-		for j, col := range t.columns {
-			colID, _ := e.db.pool.LookupID(col.Name)
-			columnsRecords = append(columnsRecords, []uint32{
-				tableID,
-				encodeInt(j+1, 2),
-				colID,
-				encodeInt(int(packType(col)), 2),
-			})
-		}
-	}
-
-	// MSI stores _Tables and _Columns sorted by their raw primary keys: the
-	// table name's string ID, then the column number.
-	slices.SortFunc(tablesRecords, func(a, b []uint32) int {
-		return cmp.Compare(a[0], b[0])
-	})
-	slices.SortFunc(columnsRecords, func(a, b []uint32) int {
-		if d := cmp.Compare(a[0], b[0]); d != 0 {
-			return d
-		}
-		return cmp.Compare(a[1], b[1])
-	})
-
+func (e *encoder) writeCatalog() error {
 	longRefs := e.db.pool.LongRefs()
-	tablesData, err := encodeTable(tablesRecords, schemaTables, longRefs)
-	if err != nil {
-		return fmt.Errorf("encode _Tables: %w", err)
+
+	tt := e.db.tables[systemTableTables]
+	tablesRecs := make([][]uint32, 0, len(tt.records))
+	for _, rec := range tt.records {
+		if e.db.tableRecordPersistent(rec[0]) {
+			tablesRecs = append(tablesRecs, rec)
+		}
 	}
-	if err := e.writeTableStream(systemTableTables, tablesData); err != nil {
+	if err := e.writeTableStream(systemTableTables, encodeRecords(tablesRecs, schemaTables, longRefs)); err != nil {
 		return err
 	}
-	columnsData, err := encodeTable(columnsRecords, schemaColumns, longRefs)
-	if err != nil {
-		return fmt.Errorf("encode _Columns: %w", err)
+
+	ct := e.db.tables[systemTableColumns]
+	columnsRecs := make([][]uint32, 0, len(ct.records))
+	for _, rec := range ct.records {
+		if rec[columnsType]&typePersistent != 0 {
+			columnsRecs = append(columnsRecs, rec)
+		}
 	}
-	return e.writeTableStream(systemTableColumns, columnsData)
+	if len(columnsRecs) == 0 {
+		return nil // An empty _Columns has no stream.
+	}
+	return e.writeTableStream(systemTableColumns, encodeRecords(columnsRecs, schemaColumns, longRefs))
 }
 
+// writeTables emits each persistent table's persistent records as a table stream.
 func (e *encoder) writeTables() error {
 	longRefs := e.db.pool.LongRefs()
-	for t := range e.db.Tables() {
-		if t.name == systemTableStreams || len(t.records) == 0 {
+	names := make([]string, 0, len(e.db.tables))
+	for name, t := range e.db.tables {
+		if isSystemTable(name) || !t.persistent() || len(t.records) == 0 {
 			continue
 		}
-		records := make([][]uint32, len(t.records))
-		for i, r := range t.records {
-			records[i] = r.fields
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		t := e.db.tables[name]
+		recs := t.records
+		if len(t.temp) > 0 {
+			recs = make([][]uint32, 0, len(t.records))
+			for _, rec := range t.records {
+				if _, temp := t.temp[&rec[0]]; !temp {
+					recs = append(recs, rec)
+				}
+			}
 		}
-		stream, err := encodeTable(records, t.columns, longRefs)
-		if err != nil {
-			return fmt.Errorf("table %s: %w", t.name, err)
+		if len(recs) == 0 {
+			continue
 		}
-		if err := e.writeTableStream(t.name, stream); err != nil {
-			return fmt.Errorf("write table %s: %w", t.name, err)
+		stream := encodeRecords(recs, persistentPrefix(t.cols), longRefs)
+		if err := e.writeTableStream(name, stream); err != nil {
+			return fmt.Errorf("write table %s: %w", name, err)
 		}
 	}
 	return nil
 }
 
-// writeStreams emits each _Streams record's Data value as a named CFB stream.
+// writeStreams emits each data stream in _Streams record order. Names with
+// the '\x05' prefix are written verbatim, not encoded.
 func (e *encoder) writeStreams() error {
-	t, ok := e.db.tables[systemTableStreams]
-	if !ok {
-		return nil
-	}
-	for _, r := range t.records {
-		name, ok := e.db.pool.Lookup(r.fields[0])
+	st := e.db.tables[systemTableStreams]
+	for _, rec := range st.records {
+		name, ok := e.db.pool.Lookup(rec[0])
 		if !ok {
-			return fmt.Errorf("_Streams: unknown string ID %d", r.fields[0])
+			return fmt.Errorf("_Streams: unknown string id %d", rec[0])
 		}
-		src, ok := e.db.streams[name]
+		src, ok := e.db.sources[rec[0]]
 		if !ok {
-			continue
+			return fmt.Errorf("_Streams: no source for %q", name)
 		}
-		// Names with the '\x05' prefix (e.g. "\x05SummaryInformation") aren't encoded.
 		streamName := name
 		if !strings.HasPrefix(name, "\x05") {
 			streamName = streamname.Encode(name)
 		}
-		if err := e.writeStream(streamName, src); err != nil {
+		if err := e.writeStream(streamName, src.open()); err != nil {
 			return fmt.Errorf("write stream %s: %w", name, err)
 		}
 	}
 	return nil
 }
 
-// writeTableStream writes data as a table-namespace CFB stream called name.
-func (e *encoder) writeTableStream(name string, data []byte) error {
-	sw, err := e.cw.CreateStream(tableMarker + streamname.Encode(name))
+func (e *encoder) writeStorages() error {
+	for _, s := range e.db.storages {
+		if err := e.writeStorage(e.cw.StorageWriter, s); err != nil {
+			return fmt.Errorf("write storage %s: %w", s.Name, err)
+		}
+	}
+	return nil
+}
+
+func (e *encoder) writeStorage(parent *cfb.StorageWriter, s *cfb.Storage) error {
+	sw, err := parent.CreateStorage(s.Name)
 	if err != nil {
 		return err
 	}
-	if _, err := sw.Write(data); err != nil {
-		sw.Close()
-		return err
+	sw.CLSID, sw.StateBits, sw.Created, sw.Modified = s.CLSID, s.StateBits, s.Created, s.Modified
+	for _, entry := range s.Entries {
+		switch entry := entry.(type) {
+		case *cfb.Storage:
+			if err := e.writeStorage(sw, entry); err != nil {
+				return err
+			}
+		case *cfb.Stream:
+			w, err := sw.CreateStream(entry.Name)
+			if err != nil {
+				return err
+			}
+			w.StateBits = entry.StateBits
+			if _, err := io.CopyBuffer(w, entry.Open(), e.buf); err != nil {
+				w.Close()
+				return err
+			}
+			if err := w.Close(); err != nil {
+				return err
+			}
+		}
 	}
-	return sw.Close()
+	return nil
 }
 
-// writeStream copies src into a CFB stream called name.
-func (e *encoder) writeStream(name string, src streamSource) error {
+func (e *encoder) writeTableStream(name string, data []byte) error {
+	return e.writeStream(tableStreamName(name), bytes.NewReader(data))
+}
+
+func (e *encoder) writeStream(name string, r io.Reader) error {
 	sw, err := e.cw.CreateStream(name)
 	if err != nil {
 		return err
 	}
-	if _, err := io.CopyBuffer(sw, src.open(), e.buf); err != nil {
+	if _, err := io.CopyBuffer(sw, r, e.buf); err != nil {
 		sw.Close()
 		return err
 	}
 	return sw.Close()
 }
 
-// encodeTable serialises per-record raw field values to a column-major stream.
-func encodeTable(records [][]uint32, schema []Column, longRefs bool) ([]byte, error) {
+// encodeRecords serialises per-record raw cells to a column-major stream.
+func encodeRecords(records [][]uint32, schema []Column, longRefs bool) []byte {
 	widths, recordSize := columnWidths(schema, longRefs)
 	stream := make([]byte, len(records)*recordSize)
 	pos := 0
-	for c, col := range schema {
+	for c := range schema {
 		w := widths[c]
 		for r, rec := range records {
 			raw := rec[c]
 			if raw == 0 {
 				continue
-			}
-			if w < 4 && raw>>(8*w) != 0 {
-				return nil, fmt.Errorf("record %d col %s: value %#x does not fit %d bytes", r, col.Name, raw, w)
 			}
 			dst := stream[pos+r*w : pos+(r+1)*w]
 			switch w {
@@ -199,19 +213,11 @@ func encodeTable(records [][]uint32, schema []Column, longRefs bool) ([]byte, er
 				binary.LittleEndian.PutUint16(dst, uint16(raw))
 			case 4:
 				binary.LittleEndian.PutUint32(dst, raw)
-			default:
+			default: // w == 3
 				dst[0], dst[1], dst[2] = byte(raw), byte(raw>>8), byte(raw>>16)
 			}
 		}
 		pos += len(records) * w
 	}
-	return stream, nil
-}
-
-// encodeInt returns the raw size-byte integer field value for v.
-func encodeInt(v, size int) uint32 {
-	if size == 2 {
-		return uint32(uint16(v) ^ 0x8000)
-	}
-	return uint32(v) ^ 0x80000000
+	return stream
 }

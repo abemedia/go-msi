@@ -23,6 +23,8 @@ func TestPackUnpackType(t *testing.T) {
 		{"string all flags", msidb.Column{Type: msidb.ColumnString, Size: 32, PrimaryKey: true, Nullable: true, Localizable: true}},
 		{"binary", msidb.Column{Type: msidb.ColumnBinary}},
 		{"binary nullable", msidb.Column{Type: msidb.ColumnBinary, Nullable: true}},
+		{"temporary int", msidb.Column{Type: msidb.ColumnInteger, Size: 2, Temporary: true}},
+		{"temporary string", msidb.Column{Type: msidb.ColumnString, Size: 8, Nullable: true, Temporary: true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -43,13 +45,14 @@ func TestUnpackTypeErrors(t *testing.T) {
 	// 10-11, size in bits 0-7.
 	tests := []struct {
 		name string
-		bits uint32
+		bits uint16
 	}{
-		{"missing persistent bit", 0x000},
-		{"kind bits without persistent bit", 0x800},
-		{"integer size 0", 0x100},
-		{"integer size 3", 0x103},
-		{"integer size 5", 0x105},
+		{"long integer size 0", 0x100},
+		{"long integer size 2", 0x102},
+		{"long integer size 3", 0x103},
+		{"long integer size 5", 0x105},
+		{"short integer size 0", 0x500},
+		{"short integer size 4", 0x504},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
