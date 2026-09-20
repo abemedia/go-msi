@@ -2,6 +2,7 @@ package streamname_test
 
 import (
 	"testing"
+	"unicode/utf16"
 
 	"github.com/abemedia/go-msi/internal/streamname"
 )
@@ -20,6 +21,28 @@ func TestEncodeDecode(t *testing.T) {
 		}
 		if got := streamname.Decode(test.encoded); got != test.decoded {
 			t.Errorf("Decode(%q) = %q, want %q", test.encoded, got, test.decoded)
+		}
+	}
+}
+
+func TestEncodedLen(t *testing.T) {
+	inputs := []string{
+		"",
+		"A",           // single
+		"AB",          // pair
+		"ABC",         // pair + single
+		"_Tables",     // multiple pairs
+		"!",           // non-alphabet ASCII
+		"é",           // non-ASCII BMP
+		"䡀_Tables",    // pass-through marker + alphabet
+		"\U0001F600",  // non-BMP, occupies a UTF-16 surrogate pair
+		"A\U0001F600", // mixed
+	}
+	for _, in := range inputs {
+		got := streamname.EncodedLen(in)
+		want := len(utf16.Encode([]rune(streamname.Encode(in))))
+		if got != want {
+			t.Errorf("EncodedLen(%q) = %d, want %d", in, got, want)
 		}
 	}
 }
