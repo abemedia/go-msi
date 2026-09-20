@@ -110,9 +110,24 @@ func TestParse(t *testing.T) {
 		{
 			"UPDATE File SET Size = 5, Name = 'x' WHERE Name = ?",
 			&sql.Update{
-				Table: "File",
-				Set:   []sql.Assignment{{Column: "Size", Value: sql.IntLit(5)}, {Column: "Name", Value: sql.StringLit("x")}},
+				Tables: []string{"File"},
+				Set: []sql.Assignment{
+					{Column: sql.ColumnRef{Name: "Size"}, Value: sql.IntLit(5)},
+					{Column: sql.ColumnRef{Name: "Name"}, Value: sql.StringLit("x")},
+				},
 				Where: &sql.Comparison{Column: sql.ColumnRef{Name: "Name"}, Op: sql.OpEqual, Value: sql.Wildcard{}},
+			},
+		},
+		{
+			"UPDATE A, B SET A.V = 9 WHERE A.K = B.K",
+			&sql.Update{
+				Tables: []string{"A", "B"},
+				Set:    []sql.Assignment{{Column: sql.ColumnRef{Table: "A", Name: "V"}, Value: sql.IntLit(9)}},
+				Where: &sql.Comparison{
+					Column: sql.ColumnRef{Table: "A", Name: "K"},
+					Op:     sql.OpEqual,
+					Value:  sql.ColumnRef{Table: "B", Name: "K"},
+				},
 			},
 		},
 		{

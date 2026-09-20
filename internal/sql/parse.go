@@ -218,16 +218,16 @@ func (p *parser) parseInsert() (Stmt, error) {
 func (p *parser) parseUpdate() (Stmt, error) {
 	p.advance() // UPDATE
 	upd := &Update{}
-	name, err := p.parseName("table name")
+	tables, err := p.parseTableList()
 	if err != nil {
 		return nil, err
 	}
-	upd.Table = name
+	upd.Tables = tables
 	if _, err := p.expect(kwSET, "'SET'"); err != nil {
 		return nil, err
 	}
 	for {
-		col, err := p.parseName("column name")
+		col, err := p.parseColumnRef()
 		if err != nil {
 			return nil, err
 		}

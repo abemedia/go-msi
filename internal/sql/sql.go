@@ -34,14 +34,14 @@ type Insert struct {
 
 // Update is an UPDATE statement.
 type Update struct {
-	Table string
-	Set   []Assignment
-	Where Expr // nil if absent
+	Tables []string
+	Set    []Assignment
+	Where  Expr // nil if absent
 }
 
 // Assignment is one column = value pair in an UPDATE SET list.
 type Assignment struct {
-	Column string
+	Column ColumnRef
 	Value  Value
 }
 
