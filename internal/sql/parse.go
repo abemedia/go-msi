@@ -173,11 +173,15 @@ func (p *parser) parseInsert() (Stmt, error) {
 		return nil, err
 	}
 	for {
-		col, err := p.parseName("column name")
+		tok := p.tok
+		col, err := p.parseColumnRef()
 		if err != nil {
 			return nil, err
 		}
-		ins.Columns = append(ins.Columns, col)
+		if col.Table != "" && col.Table != ins.Table {
+			return nil, p.errorf(tok, "expected column of %s", ins.Table)
+		}
+		ins.Columns = append(ins.Columns, col.Name)
 		if !p.accept(kindComma) {
 			break
 		}
@@ -284,17 +288,19 @@ func (p *parser) parseCreate() (Stmt, error) {
 	if _, err := p.expect(kindLParen, "'('"); err != nil {
 		return nil, err
 	}
-	for p.tok.Kind != kwPRIMARY {
+	for {
 		cd, err := p.parseColumnDef()
 		if err != nil {
 			return nil, err
 		}
 		ct.Columns = append(ct.Columns, cd)
-		if _, err := p.expect(kindComma, "',' or 'PRIMARY KEY'"); err != nil {
-			return nil, err
+		if !p.accept(kindComma) {
+			break
 		}
 	}
-	p.advance() // PRIMARY
+	if _, err := p.expect(kwPRIMARY, "',' or 'PRIMARY KEY'"); err != nil {
+		return nil, err
+	}
 	if _, err := p.expect(kwKEY, "'KEY'"); err != nil {
 		return nil, err
 	}
