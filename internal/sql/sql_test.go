@@ -108,6 +108,14 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			"INSERT INTO `Feature` (`Feature`.`Feature`, `Title`) VALUES ('Tennis', 'x')",
+			&sql.Insert{
+				Table:   "Feature",
+				Columns: []string{"Feature", "Title"},
+				Values:  []sql.Value{sql.StringLit("Tennis"), sql.StringLit("x")},
+			},
+		},
+		{
 			"UPDATE File SET Size = 5, Name = 'x' WHERE Name = ?",
 			&sql.Update{
 				Tables: []string{"File"},
@@ -146,7 +154,7 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			"CREATE TABLE `T` (Id INT NOT NULL, Name CHAR(72) LOCALIZABLE, Blob OBJECT, PRIMARY KEY Id) HOLD",
+			"CREATE TABLE `T` (Id INT NOT NULL, Name CHAR(72) LOCALIZABLE, Blob OBJECT PRIMARY KEY Id) HOLD",
 			&sql.CreateTable{
 				Table: "T",
 				Columns: []sql.ColumnDef{
@@ -159,7 +167,7 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			"CREATE TABLE [T2] (a CHARACTER, b LONGCHAR, c SHORT TEMPORARY, d INTEGER, PRIMARY KEY a, b)",
+			"CREATE TABLE [T2] (a CHARACTER, b LONGCHAR, c SHORT TEMPORARY, d INTEGER PRIMARY KEY a, b)",
 			&sql.CreateTable{
 				Table: "T2",
 				Columns: []sql.ColumnDef{
@@ -227,6 +235,8 @@ func TestParseErrors(t *testing.T) {
 		{"INSERT INTO 1", &sql.Error{Pos: 12, Msg: "expected table name"}},
 		{"INSERT INTO T a", &sql.Error{Pos: 14, Msg: "expected '('"}},
 		{"INSERT INTO T (a, 1) VALUES (2)", &sql.Error{Pos: 18, Msg: "expected column name"}},
+		{"INSERT INTO T (T.) VALUES (1)", &sql.Error{Pos: 17, Msg: "expected column name after '.'"}},
+		{"INSERT INTO T (X.a) VALUES (1)", &sql.Error{Pos: 15, Msg: "expected column of T"}},
 		{"INSERT INTO T (a VALUES (1)", &sql.Error{Pos: 17, Msg: "expected ')'"}},
 		{"INSERT INTO T (a) 1", &sql.Error{Pos: 18, Msg: "expected 'VALUES'"}},
 		{"INSERT INTO T (a) VALUES 1", &sql.Error{Pos: 25, Msg: "expected '('"}},
@@ -253,16 +263,17 @@ func TestParseErrors(t *testing.T) {
 		{"CREATE Foo", &sql.Error{Pos: 7, Msg: "expected 'TABLE'"}},
 		{"CREATE TABLE 1", &sql.Error{Pos: 13, Msg: "expected table name"}},
 		{"CREATE TABLE T a", &sql.Error{Pos: 15, Msg: "expected '('"}},
-		{"CREATE TABLE T (1 INT, PRIMARY KEY a)", &sql.Error{Pos: 16, Msg: "expected column name"}},
-		{"CREATE TABLE T (a FOO, PRIMARY KEY a)", &sql.Error{Pos: 18, Msg: "expected column type"}},
+		{"CREATE TABLE T (1 INT PRIMARY KEY a)", &sql.Error{Pos: 16, Msg: "expected column name"}},
+		{"CREATE TABLE T (a FOO PRIMARY KEY a)", &sql.Error{Pos: 18, Msg: "expected column type"}},
 		{"CREATE TABLE T (a INT)", &sql.Error{Pos: 21, Msg: "expected ',' or 'PRIMARY KEY'"}},
-		{"CREATE TABLE T (a CHAR(x), PRIMARY KEY a)", &sql.Error{Pos: 23, Msg: "expected column width"}},
-		{"CREATE TABLE T (a CHAR(999), PRIMARY KEY a)", &sql.Error{Pos: 23, Msg: "column width must be 0-255"}},
-		{"CREATE TABLE T (a CHAR(72, PRIMARY KEY a)", &sql.Error{Pos: 25, Msg: "expected ')'"}},
-		{"CREATE TABLE T (a INT NOT x, PRIMARY KEY a)", &sql.Error{Pos: 26, Msg: "expected 'NULL'"}},
-		{"CREATE TABLE T (a INT, PRIMARY a)", &sql.Error{Pos: 31, Msg: "expected 'KEY'"}},
-		{"CREATE TABLE T (a INT, PRIMARY KEY 1)", &sql.Error{Pos: 35, Msg: "expected key column name"}},
-		{"CREATE TABLE T (a INT, PRIMARY KEY a", &sql.Error{Pos: 36, Msg: "expected ')'"}},
+		{"CREATE TABLE T (a INT, PRIMARY KEY a)", &sql.Error{Pos: 23, Msg: "expected column name"}},
+		{"CREATE TABLE T (a CHAR(x) PRIMARY KEY a)", &sql.Error{Pos: 23, Msg: "expected column width"}},
+		{"CREATE TABLE T (a CHAR(999) PRIMARY KEY a)", &sql.Error{Pos: 23, Msg: "column width must be 0-255"}},
+		{"CREATE TABLE T (a CHAR(72 PRIMARY KEY a)", &sql.Error{Pos: 26, Msg: "expected ')'"}},
+		{"CREATE TABLE T (a INT NOT x PRIMARY KEY a)", &sql.Error{Pos: 26, Msg: "expected 'NULL'"}},
+		{"CREATE TABLE T (a INT PRIMARY a)", &sql.Error{Pos: 30, Msg: "expected 'KEY'"}},
+		{"CREATE TABLE T (a INT PRIMARY KEY 1)", &sql.Error{Pos: 34, Msg: "expected key column name"}},
+		{"CREATE TABLE T (a INT PRIMARY KEY a", &sql.Error{Pos: 35, Msg: "expected ')'"}},
 
 		// ALTER TABLE
 		{"ALTER Foo", &sql.Error{Pos: 6, Msg: "expected 'TABLE'"}},
