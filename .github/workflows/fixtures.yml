@@ -1,0 +1,43 @@
+name: Fixtures
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - testdata/src/**
+      - .github/workflows/fixtures.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: testdata/src/global.json
+
+      - name: Build fixtures
+        run: dotnet build testdata/src
+
+      - name: Commit fixtures
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- '*.msi' '*.msp'
+          git diff --cached --quiet && { echo 'no fixture changes'; exit 0; }
+          git commit -m 'chore: rebuild MSI fixtures'
+          git push origin "HEAD:$GITHUB_REF_NAME"

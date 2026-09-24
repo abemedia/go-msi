@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Patch AllowRemoval="yes"
+         Manufacturer="go-msi tests"
+         DisplayName="HelloWorld patch"
+         Description="HelloWorld test patch"
+         Classification="Update">
+
+    <Media Id="5000" Cabinet="patch.cab">
+      <PatchBaseline Id="RTM"
+                     BaselineFile="$(var.hello.TargetDir)$(var.hello.TargetName).wixpdb"
+                     UpdateFile="$(var.hello_v2.TargetDir)$(var.hello_v2.TargetName).wixpdb"/>
+    </Media>
+
+    <PatchFamilyRef Id="HelloPatch"/>
+  </Patch>
+
+  <Fragment>
+    <PatchFamily Id="HelloPatch" Version="1.0.1" Supersede="yes">
+      <ComponentRef Id="HelloComponent"/>
+    </PatchFamily>
+  </Fragment>
+</Wix>

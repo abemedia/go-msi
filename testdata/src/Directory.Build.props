@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <AcceptEula>wix7</AcceptEula>
+  </PropertyGroup>
+</Project>
