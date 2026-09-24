@@ -1,0 +1,9 @@
+<Project Sdk="WixToolset.Sdk">
+  <PropertyGroup>
+    <Fixture>false</Fixture>
+    <DefineConstants>Version=1.0.1;Source=$(MSBuildThisFileDirectory)hello.txt</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../hello/hello.wxs" Link="hello.wxs"/>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+<Project Sdk="WixToolset.Sdk">
+  <PropertyGroup>
+    <OutputType>Patch</OutputType>
+    <OutputName>hello</OutputName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../hello/hello.wixproj"/>
+    <ProjectReference Include="../hello_v2/hello_v2.wixproj"/>
+  </ItemGroup>
+</Project>

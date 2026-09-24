@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="CopyFixture" AfterTargets="Build" Condition="'$(MSBuildProjectExtension)' == '.wixproj' and '$(Fixture)' != 'false'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(MSBuildThisFileDirectory).."/>
+  </Target>
+</Project>
