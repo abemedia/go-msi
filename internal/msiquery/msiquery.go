@@ -64,6 +64,7 @@ var (
 	procDatabaseOpenView       = msi.NewProc("MsiDatabaseOpenViewW")
 	procDatabaseGetPrimaryKeys = msi.NewProc("MsiDatabaseGetPrimaryKeysW")
 	procDatabaseExport         = msi.NewProc("MsiDatabaseExportW")
+	procDatabaseImport         = msi.NewProc("MsiDatabaseImportW")
 	procViewExecute            = msi.NewProc("MsiViewExecute")
 	procViewModify             = msi.NewProc("MsiViewModify")
 	procViewFetch              = msi.NewProc("MsiViewFetch")
@@ -92,6 +93,29 @@ func OpenDatabase(path string, persist Persist) (Database, error) {
 	ret, _, _ := procOpenDatabase.Call(
 		uintptr(unsafe.Pointer(pathW)),
 		uintptr(persist),
+		uintptr(unsafe.Pointer(&h)),
+	)
+	if ret != 0 {
+		return 0, syscall.Errno(ret)
+	}
+	return h, nil
+}
+
+// OpenDatabaseOutput opens the MSI at path read-only; Commit writes the
+// database to a new file at out.
+func OpenDatabaseOutput(path, out string) (Database, error) {
+	pathW, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	outW, err := syscall.UTF16PtrFromString(out)
+	if err != nil {
+		return 0, err
+	}
+	var h Database
+	ret, _, _ := procOpenDatabase.Call(
+		uintptr(unsafe.Pointer(pathW)),
+		uintptr(unsafe.Pointer(outW)),
 		uintptr(unsafe.Pointer(&h)),
 	)
 	if ret != 0 {
@@ -172,6 +196,27 @@ func (d Database) Export(table, folder, file string) error {
 	ret, _, _ := procDatabaseExport.Call(
 		uintptr(d),
 		uintptr(unsafe.Pointer(tableW)),
+		uintptr(unsafe.Pointer(folderW)),
+		uintptr(unsafe.Pointer(fileW)),
+	)
+	if ret != 0 {
+		return syscall.Errno(ret)
+	}
+	return nil
+}
+
+// Import reads the archive file named file in folder into the database.
+func (d Database) Import(folder, file string) error {
+	folderW, err := syscall.UTF16PtrFromString(folder)
+	if err != nil {
+		return err
+	}
+	fileW, err := syscall.UTF16PtrFromString(file)
+	if err != nil {
+		return err
+	}
+	ret, _, _ := procDatabaseImport.Call(
+		uintptr(d),
 		uintptr(unsafe.Pointer(folderW)),
 		uintptr(unsafe.Pointer(fileW)),
 	)
