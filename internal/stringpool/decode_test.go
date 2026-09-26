@@ -37,6 +37,7 @@ func TestDecodeErrors(t *testing.T) {
 		{"unsupported codepage", badCP, data, stringpool.ErrUnsupportedCodePage, "code page 437"},
 		{"data shorter than declared", pool, data[:1], io.ErrUnexpectedEOF, ""},
 		{"trailing data bytes", pool, slices.Concat(data, []byte{1, 2}), stringpool.ErrFormat, "2 trailing bytes"},
+		{"string stored twice", slices.Concat(pool, pool[4:]), slices.Concat(data, data), stringpool.ErrFormat, `string "AB" stored twice`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

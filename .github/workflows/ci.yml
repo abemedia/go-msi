@@ -1,9 +1,9 @@
 name: CI
 
 on:
-  pull_request:
-    branches:
-      - master
+  # pull_request:
+  #   branches:
+  #     - master
   push:
     branches:
       - master
@@ -50,6 +50,10 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Install msitools
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y msitools
 
       - name: Run tests
         run: go test -v -race -coverprofile coverage.out ./...
