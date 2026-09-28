@@ -1,6 +1,4 @@
-// Package blobstore stages binary blobs to a single temp file. Blobs are
-// addressed by opaque handles; deleted handles return their extents to a
-// free list for reuse. The backing file only grows.
+// Package blobstore stages binary blobs to a single temp file.
 package blobstore
 
 import (
@@ -15,13 +13,12 @@ import (
 type Handle uint32
 
 // Store is a session-only flat blob store backed by one temp file. The
-// zero value is ready to use; the backing file is created lazily on the
-// first [Store.Create] call.
+// zero value is ready to use.
 type Store struct {
 	once sync.Once
 
-	mu      sync.Mutex
-	err     error // nil until init fails or Close runs; then the store is unusable
+	mu      sync.RWMutex
+	err     error
 	file    *os.File
 	chains  map[Handle][]extent
 	free    []extent
@@ -37,10 +34,10 @@ type extent struct {
 var (
 	errClosed   = errors.New("closed")
 	errNotFound = errors.New("not found")
+	errDeleted  = errors.New("deleted")
 )
 
-// init creates the backing file and registers the GC cleanup hook on the
-// first call.
+// init creates the backing file.
 func (s *Store) init() {
 	s.once.Do(func() {
 		s.mu.Lock()
@@ -93,8 +90,8 @@ func (s *Store) Create() (Handle, io.WriteCloser, error) {
 // Open returns a reader over the blob identified by h. The returned
 // reader stays valid until h is deleted or the store is closed.
 func (s *Store) Open(h Handle) (io.ReadSeeker, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -102,11 +99,14 @@ func (s *Store) Open(h Handle) (io.ReadSeeker, error) {
 	if !ok {
 		return nil, errNotFound
 	}
-	return newBlobReader(s.file, chain), nil
+	var size int64
+	for _, e := range chain {
+		size += e.length
+	}
+	return &blobReader{s: s, h: h, size: size}, nil
 }
 
-// Delete drops the blob identified by h and returns its extents to the
-// free list for reuse. Unknown handles are silently ignored.
+// Delete drops the blob identified by h. Unknown handles are silently ignored.
 func (s *Store) Delete(h Handle) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,32 +211,34 @@ func (w *writer) Close() error {
 	return nil
 }
 
-// blobReader is an io.ReadSeeker over a blob's chain of extents in one file.
+// blobReader reads a staged blob.
 type blobReader struct {
-	file    *os.File
-	extents []extent
-	pos     int64
-	size    int64
-}
-
-func newBlobReader(file *os.File, extents []extent) *blobReader {
-	var size int64
-	for _, e := range extents {
-		size += e.length
-	}
-	return &blobReader{file: file, extents: extents, size: size}
+	s    *Store
+	h    Handle
+	pos  int64
+	size int64
 }
 
 func (r *blobReader) Read(p []byte) (int, error) {
 	if r.pos >= r.size {
 		return 0, io.EOF
 	}
+	// A concurrent Delete may reuse these extents.
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	if r.s.err != nil {
+		return 0, r.s.err
+	}
+	chain, ok := r.s.chains[r.h]
+	if !ok {
+		return 0, errDeleted
+	}
 	pos := r.pos
-	for _, e := range r.extents {
+	for _, e := range chain {
 		if pos < e.length {
 			avail := e.length - pos
 			chunk := min(int64(len(p)), avail)
-			n, err := r.file.ReadAt(p[:chunk], e.offset+pos)
+			n, err := r.s.file.ReadAt(p[:chunk], e.offset+pos)
 			r.pos += int64(n)
 			return n, err
 		}
