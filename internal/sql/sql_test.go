@@ -298,6 +298,7 @@ func TestParseErrors(t *testing.T) {
 
 		// literals & lexical
 		{"SELECT * FROM `T WHERE a = 1", &sql.Error{Pos: 14, Msg: "unterminated quoted identifier"}},
+		{"SELECT * FROM ``", &sql.Error{Pos: 14, Msg: "empty quoted identifier"}},
 		{"SELECT * FROM T;", &sql.Error{Pos: 15, Msg: "unexpected character ';'"}},
 		{"SELECT * FROM T WHERE a !> 1", &sql.Error{Pos: 24, Msg: "expected '!='"}},
 		{"SELECT * FROM T WHERE a = 99999999999999999999", &sql.Error{Pos: 26, Msg: "integer 99999999999999999999 out of range"}},
