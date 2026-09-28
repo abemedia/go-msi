@@ -11,7 +11,7 @@ import (
 )
 
 // getEncoding returns the text encoding for cp, or nil if cp is not implemented.
-func getEncoding(cp uint16) encoding.Encoding { //nolint:funlen
+func getEncoding(cp uint16) encoding.Encoding {
 	switch cp {
 	case 0:
 		return charmap.Windows1252

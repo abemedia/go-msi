@@ -14,7 +14,7 @@ import (
 var ErrFormat = errors.New("not a valid string pool")
 
 // Decode parses the _StringPool and _StringData streams.
-func Decode(pool, data []byte) (*Pool, error) { //nolint:funlen
+func Decode(pool, data []byte) (*Pool, error) {
 	if len(pool) < 4 {
 		return nil, io.ErrUnexpectedEOF
 	}
