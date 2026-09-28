@@ -13,28 +13,27 @@ linters:
     - exhaustruct_v5
     - forcetypeassert
     - funcorder
+    - funlen
     - gochecknoglobals
     - gochecknoinits
     - gocyclo
-    - godox
     - gomodguard # deprecated
     - gosec
     - gosmopolitan
     - ireturn
     - mnd
     - nlreturn
+    - noctx
     - noinlineerr
     - nonamedreturns
     - paralleltest
     - recvcheck
+    - unqueryvet
     - varnamelen
     - wrapcheck
     - wsl
     - wsl_v5
   settings:
-    funlen:
-      # Complexity is already covered by gocognit.
-      statements: -1
     govet:
       enable-all: true
       disable: [fieldalignment]
@@ -45,25 +44,19 @@ linters:
       - std-error-handling
     rules:
       - linters:
-          - funlen
           - gocognit
           - goconst
           - gocritic
           - lll
+          - prealloc
         path: (.+)_test.go
       - linters: [govet]
         text: 'shadow: declaration of "err" shadows declaration'
 
 formatters:
   enable:
-    - gofmt
     - gofumpt
-    - goimports
   settings:
-    gofmt:
-      rewrite-rules:
-        - pattern: interface{}
-          replacement: any
     gofumpt:
       extra:
         group-params: true

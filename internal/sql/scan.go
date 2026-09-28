@@ -258,7 +258,7 @@ func isIdentStart(b byte) bool {
 func isIdent(b byte) bool { return isIdentStart(b) || isDigit(b) }
 
 // keywordKind reports the keyword kind for word, matched case-insensitively.
-func keywordKind(word string) (kind, bool) { //nolint:funlen
+func keywordKind(word string) (kind, bool) {
 	const minKeywordLen = len("IS")
 	const maxKeywordLen = len("LOCALIZABLE")
 	if len(word) < minKeywordLen || len(word) > maxKeywordLen {
