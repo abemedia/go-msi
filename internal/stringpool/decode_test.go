@@ -11,6 +11,33 @@ import (
 	"github.com/abemedia/go-msi/internal/stringpool"
 )
 
+func TestDecodeEmptyLongStringIsFree(t *testing.T) {
+	p, err := stringpool.New(1252)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Intern("AB", true)
+	pool, data, err := stringpool.Encode(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := binary.LittleEndian.AppendUint16(nil, 0)  // length
+	entry = binary.LittleEndian.AppendUint16(entry, 1) // refs
+	entry = binary.LittleEndian.AppendUint32(entry, 0) // long-form length
+	pool = slices.Insert(pool, 4, entry...)
+
+	p, err = stringpool.Decode(pool, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := p.Lookup(1); ok {
+		t.Errorf("Lookup(1) = (%q, true), want free", s)
+	}
+	if s, ok := p.Lookup(2); s != "AB" || !ok {
+		t.Errorf(`Lookup(2) = (%q, %v), want ("AB", true)`, s, ok)
+	}
+}
+
 func TestDecodeErrors(t *testing.T) {
 	p, err := stringpool.New(1252)
 	if err != nil {
@@ -37,6 +64,7 @@ func TestDecodeErrors(t *testing.T) {
 		{"unsupported codepage", badCP, data, stringpool.ErrUnsupportedCodePage, "code page 437"},
 		{"data shorter than declared", pool, data[:1], io.ErrUnexpectedEOF, ""},
 		{"trailing data bytes", pool, slices.Concat(data, []byte{1, 2}), stringpool.ErrFormat, "2 trailing bytes"},
+		{"string stored twice", slices.Concat(pool, pool[4:]), slices.Concat(data, data), stringpool.ErrFormat, `string "AB" stored twice`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
