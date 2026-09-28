@@ -56,7 +56,7 @@ func Decode(pool, data []byte) (*Pool, error) {
 			return nil, io.ErrUnexpectedEOF
 		}
 
-		if refs == 0 {
+		if refs == 0 || length == 0 {
 			p.entries = append(p.entries, entry{})
 			p.free = append(p.free, uint32(len(p.entries)))
 			ends = append(ends, len(decoded))
@@ -90,6 +90,9 @@ func Decode(pool, data []byte) (*Pool, error) {
 		e := &p.entries[i]
 		e.s = all[start:end]
 		if e.persistentRefcount != 0 {
+			if _, dup := p.index[e.s]; dup {
+				return nil, fmt.Errorf("%w: string %q stored twice", ErrFormat, e.s)
+			}
 			p.index[e.s] = uint32(i) + 1
 		}
 		start = end
