@@ -12,9 +12,9 @@ const (
 	kindError kind = iota
 	kindEOF
 
-	kindIdent  // bare, `backtick`, or [bracket] identifier
-	kindString // 'single-quoted' literal (payload decoded)
-	kindInt    // unsigned integer literal
+	kindIdent  // bare or `backtick` identifier
+	kindString // 'single-quoted' literal
+	kindInt    // integer literal
 	kindParam  // ? placeholder
 
 	kindLParen
@@ -22,7 +22,6 @@ const (
 	kindComma
 	kindDot
 	kindStar
-	kindMinus
 	kindEq
 	kindNe
 	kindLt
@@ -33,6 +32,7 @@ const (
 	kwADD
 	kwALTER
 	kwAND
+	kwAS
 	kwBY
 	kwCHAR
 	kwCREATE
@@ -47,7 +47,6 @@ const (
 	kwINTO
 	kwIS
 	kwKEY
-	kwLIKE
 	kwLOCALIZABLE
 	kwLONG
 	kwLONGCHAR
@@ -64,11 +63,12 @@ const (
 	kwTEMPORARY
 	kwUPDATE
 	kwVALUES
+	kwVARCHAR
 	kwWHERE
 )
 
 // token is one lexical token. For identifiers and string literals Text is the
-// decoded value; otherwise it is the source slice. Pos is the byte offset of
+// unquoted value; otherwise it is the source slice. Pos is the byte offset of
 // the token in the input.
 type token struct {
 	Kind kind
@@ -124,9 +124,6 @@ func (s *scanner) scan() token {
 	case b == '?':
 		s.pos++
 		return s.tok(kindParam, start)
-	case b == '-':
-		s.pos++
-		return s.tok(kindMinus, start)
 	case b == '=':
 		s.pos++
 		return s.tok(kindEq, start)
@@ -134,15 +131,11 @@ func (s *scanner) scan() token {
 		return s.scanLess(start)
 	case b == '>':
 		return s.scanGreater(start)
-	case b == '!':
-		return s.scanBang(start)
 	case b == '\'':
 		return s.scanString(start)
 	case b == '`':
-		return s.scanQuoted(start, '`')
-	case b == '[':
-		return s.scanQuoted(start, ']')
-	case isDigit(b):
+		return s.scanQuoted(start)
+	case b == '-', isDigit(b):
 		return s.scanNumber(start)
 	case isIdentStart(b):
 		return s.scanIdent(start)
@@ -177,60 +170,44 @@ func (s *scanner) scanGreater(start int) token {
 	return s.tok(kindGt, start)
 }
 
-func (s *scanner) scanBang(start int) token {
-	s.pos++ // '!'
-	if s.pos < len(s.input) && s.input[s.pos] == '=' {
-		s.pos++
-		return s.tok(kindNe, start)
-	}
-	return s.errorf(start, "expected '!='")
-}
-
-// scanString scans a 'single-quoted' literal. Two single quotes escape a quote.
+// scanString scans a 'single-quoted' literal.
 func (s *scanner) scanString(start int) token {
-	s.pos++ // opening quote
-	from := s.pos
-	escaped := false
-	for s.pos < len(s.input) {
-		if s.input[s.pos] == '\'' {
-			if s.pos+1 < len(s.input) && s.input[s.pos+1] == '\'' {
-				escaped = true
-				s.pos += 2
-				continue
-			}
-			text := s.input[from:s.pos]
-			s.pos++ // closing quote
-			if escaped {
-				text = strings.ReplaceAll(text, "''", "'")
-			}
-			return token{Kind: kindString, Text: text, Pos: start}
-		}
-		s.pos++
+	from := start + 1
+	n := strings.IndexByte(s.input[from:], '\'')
+	if n < 0 {
+		return s.errorf(start, "unterminated string literal")
 	}
-	return s.errorf(start, "unterminated string literal")
+	s.pos = from + n + 1
+	return token{Kind: kindString, Text: s.input[from : from+n], Pos: start}
 }
 
-// scanQuoted scans a delimited identifier ending at delim (a backtick or ']').
-func (s *scanner) scanQuoted(start int, delim byte) token {
-	s.pos++ // opening delimiter
-	from := s.pos
-	for s.pos < len(s.input) {
-		if s.input[s.pos] == delim {
-			if s.pos == from {
-				return s.errorf(start, "empty quoted identifier")
-			}
-			text := s.input[from:s.pos]
-			s.pos++ // closing delimiter
-			return token{Kind: kindIdent, Text: text, Pos: start}
-		}
-		s.pos++
+// scanQuoted scans a `backtick-quoted` identifier.
+func (s *scanner) scanQuoted(start int) token {
+	from := start + 1
+	n := strings.IndexByte(s.input[from:], '`')
+	if n < 0 {
+		return s.errorf(start, "unterminated quoted identifier")
 	}
-	return s.errorf(start, "unterminated quoted identifier")
+	if n == 0 {
+		return s.errorf(start, "empty quoted identifier")
+	}
+	s.pos = from + n + 1
+	return token{Kind: kindIdent, Text: s.input[from : from+n], Pos: start}
 }
 
 func (s *scanner) scanNumber(start int) token {
+	s.pos++ // sign or first digit
 	for s.pos < len(s.input) && isDigit(s.input[s.pos]) {
 		s.pos++
+	}
+	if s.input[start:s.pos] == "-" {
+		return s.errorf(start, "expected digit after '-'")
+	}
+	if s.pos < len(s.input) && isIdentStart(s.input[s.pos]) {
+		for s.pos < len(s.input) && isIdent(s.input[s.pos]) {
+			s.pos++
+		}
+		return s.errorf(start, "unrecognized token %q", s.input[start:s.pos])
 	}
 	return s.tok(kindInt, start)
 }
@@ -245,9 +222,9 @@ func (s *scanner) scanIdent(start int) token {
 	return s.tok(kindIdent, start)
 }
 
-// isSpace reports whether b is whitespace: space, tab, newline, or form feed.
-// Carriage return is not, matching the MSI tokenizer.
-func isSpace(b byte) bool { return b == ' ' || b == '\t' || b == '\n' || b == '\f' }
+// isSpace reports whether b is whitespace: space, tab, newline, carriage
+// return, or form feed.
+func isSpace(b byte) bool { return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' }
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 
@@ -281,6 +258,8 @@ func keywordKind(word string) (kind, bool) {
 		return kwALTER, true
 	case "AND":
 		return kwAND, true
+	case "AS":
+		return kwAS, true
 	case "BY":
 		return kwBY, true
 	case "CHAR", "CHARACTER":
@@ -309,8 +288,6 @@ func keywordKind(word string) (kind, bool) {
 		return kwIS, true
 	case "KEY":
 		return kwKEY, true
-	case "LIKE":
-		return kwLIKE, true
 	case "LOCALIZABLE":
 		return kwLOCALIZABLE, true
 	case "LONG":
@@ -343,6 +320,8 @@ func keywordKind(word string) (kind, bool) {
 		return kwUPDATE, true
 	case "VALUES":
 		return kwVALUES, true
+	case "VARCHAR":
+		return kwVARCHAR, true
 	case "WHERE":
 		return kwWHERE, true
 	}

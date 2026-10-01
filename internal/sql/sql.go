@@ -11,6 +11,48 @@ func Parse(sql string) (Stmt, error) {
 	return p.parse()
 }
 
+// Params returns the number of ? placeholders in s.
+func Params(s Stmt) int {
+	switch s := s.(type) {
+	case *Select:
+		return exprParams(s.Where)
+	case *Insert:
+		n := 0
+		for _, v := range s.Values {
+			n += valueParams(v)
+		}
+		return n
+	case *Update:
+		n := exprParams(s.Where)
+		for _, a := range s.Set {
+			n += valueParams(a.Value)
+		}
+		return n
+	case *Delete:
+		return exprParams(s.Where)
+	}
+	return 0
+}
+
+func exprParams(e Expr) int {
+	switch e := e.(type) {
+	case *And:
+		return exprParams(e.Left) + exprParams(e.Right)
+	case *Or:
+		return exprParams(e.Left) + exprParams(e.Right)
+	case *Comparison:
+		return valueParams(e.Value)
+	}
+	return 0
+}
+
+func valueParams(v Value) int {
+	if _, ok := v.(Marker); ok {
+		return 1
+	}
+	return 0
+}
+
 // Stmt is a parsed statement: one of [*Select], [*Insert], [*Update],
 // [*Delete], [*CreateTable], [*AlterTable], or [*DropTable].
 type Stmt interface{ isStmt() }
@@ -19,7 +61,7 @@ type Stmt interface{ isStmt() }
 type Select struct {
 	Distinct bool
 	Columns  []ColumnRef // nil = all columns
-	From     []string    // one or more tables; multiple is a comma cross-join
+	Tables   []string    // one or more tables; multiple is a comma cross-join
 	Where    Expr        // nil if absent
 	OrderBy  []ColumnRef // nil if absent
 }
@@ -47,7 +89,7 @@ type Assignment struct {
 
 // Delete is a DELETE statement.
 type Delete struct {
-	From  []string
+	Table string
 	Where Expr // nil if absent
 }
 
@@ -113,8 +155,8 @@ const (
 	TypeObject            // OBJECT
 )
 
-// Expr is a WHERE-clause expression: one of [*And], [*Or], [*Comparison],
-// or [*IsNull].
+// Expr is a WHERE-clause expression: one of [*And], [*Or], [*ColumnEqual],
+// [*Comparison], or [*IsNull].
 type Expr interface{ isExpr() }
 
 // And is a conjunction of two expressions.
@@ -122,6 +164,9 @@ type And struct{ Left, Right Expr }
 
 // Or is a disjunction of two expressions.
 type Or struct{ Left, Right Expr }
+
+// ColumnEqual is `column = column`.
+type ColumnEqual struct{ Left, Right ColumnRef }
 
 // Comparison is `column OP value`.
 type Comparison struct {
@@ -136,10 +181,11 @@ type IsNull struct {
 	Not    bool
 }
 
-func (*And) isExpr()        {}
-func (*Or) isExpr()         {}
-func (*Comparison) isExpr() {}
-func (*IsNull) isExpr()     {}
+func (*And) isExpr()         {}
+func (*Or) isExpr()          {}
+func (*ColumnEqual) isExpr() {}
+func (*Comparison) isExpr()  {}
+func (*IsNull) isExpr()      {}
 
 // CompareOp is a comparison operator.
 type CompareOp uint8
@@ -154,8 +200,8 @@ const (
 	OpGreaterEqual
 )
 
-// Value is a literal or column reference: one of [ColumnRef], [IntLit],
-// [StringLit], [Wildcard], or [Null].
+// Value is a literal or parameter: one of [IntLit], [StringLit], [Marker],
+// or [Null].
 type Value interface{ isValue() }
 
 // ColumnRef names a column, optionally qualified by its table.
@@ -170,16 +216,15 @@ type IntLit int
 // StringLit is a single-quoted string literal.
 type StringLit string
 
-// Wildcard is a `?` parameter placeholder.
-type Wildcard struct{}
+// Marker is a `?` parameter marker, numbered in source order from 0.
+type Marker int
 
 // Null is the NULL literal.
 type Null struct{}
 
-func (ColumnRef) isValue() {}
 func (IntLit) isValue()    {}
 func (StringLit) isValue() {}
-func (Wildcard) isValue()  {}
+func (Marker) isValue()    {}
 func (Null) isValue()      {}
 
 // Error is a syntax error at a byte offset into the source SQL.

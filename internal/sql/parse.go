@@ -7,8 +7,9 @@ import (
 
 // parser is a recursive-descent parser with one token of lookahead in tok.
 type parser struct {
-	sc  scanner
-	tok token // current token (one-token lookahead)
+	sc     scanner
+	tok    token // current token (one-token lookahead)
+	params int   // ? placeholders seen so far
 }
 
 func (p *parser) advance() {
@@ -130,11 +131,11 @@ func (p *parser) parseSelect() (Stmt, error) {
 	if _, err := p.expect(kwFROM, "'FROM'"); err != nil {
 		return nil, err
 	}
-	from, err := p.parseTableList()
+	tables, err := p.parseTableList()
 	if err != nil {
 		return nil, err
 	}
-	s.From = from
+	s.Tables = tables
 	if p.accept(kwWHERE) {
 		if s.Where, err = p.parseExpr(); err != nil {
 			return nil, err
@@ -200,7 +201,7 @@ func (p *parser) parseInsert() (Stmt, error) {
 		if len(ins.Values) == len(ins.Columns) {
 			return nil, p.errorf(p.tok, "expected %d values to match the column list", len(ins.Columns))
 		}
-		v, err := p.parseConst()
+		v, err := p.parseValue()
 		if err != nil {
 			return nil, err
 		}
@@ -238,7 +239,7 @@ func (p *parser) parseUpdate() (Stmt, error) {
 		if _, err := p.expect(kindEq, "'='"); err != nil {
 			return nil, err
 		}
-		v, err := p.parseConst()
+		v, err := p.parseValue()
 		if err != nil {
 			return nil, err
 		}
@@ -261,11 +262,11 @@ func (p *parser) parseDelete() (Stmt, error) {
 		return nil, err
 	}
 	del := &Delete{}
-	from, err := p.parseTableList()
+	name, err := p.parseName("table name")
 	if err != nil {
 		return nil, err
 	}
-	del.From = from
+	del.Table = name
 	if p.accept(kwWHERE) {
 		if del.Where, err = p.parseExpr(); err != nil {
 			return nil, err
@@ -404,24 +405,15 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 	default:
 		return ColumnDef{}, p.errorf(p.tok, "expected column type")
 	}
-	for {
-		switch p.tok.Kind {
-		case kwLOCALIZABLE:
-			p.advance()
-			cd.Localizable = true
-		case kwTEMPORARY:
-			p.advance()
-			cd.Temporary = true
-		case kwNOT:
-			p.advance()
-			if _, err := p.expect(kwNULL, "'NULL'"); err != nil {
-				return ColumnDef{}, err
-			}
-			cd.NotNull = true
-		default:
-			return cd, nil
+	if p.accept(kwNOT) {
+		if _, err := p.expect(kwNULL, "'NULL'"); err != nil {
+			return ColumnDef{}, err
 		}
+		cd.NotNull = true
 	}
+	cd.Temporary = p.accept(kwTEMPORARY)
+	cd.Localizable = p.accept(kwLOCALIZABLE)
+	return cd, nil
 }
 
 func (p *parser) parseWidth() (int, error) {
@@ -491,9 +483,20 @@ func (p *parser) parsePrimary() (Expr, error) {
 		}
 		return &IsNull{Column: col, Not: not}, nil
 	}
+	tok := p.tok
 	op, err := p.parseCompareOp()
 	if err != nil {
 		return nil, err
+	}
+	if p.tok.Kind == kindIdent {
+		if op != OpEqual {
+			return nil, p.errorf(tok, "expected '=' between columns")
+		}
+		right, err := p.parseColumnRef()
+		if err != nil {
+			return nil, err
+		}
+		return &ColumnEqual{Left: col, Right: right}, nil
 	}
 	val, err := p.parseValue()
 	if err != nil {
@@ -527,54 +530,28 @@ func (p *parser) parseCompareOp() (CompareOp, error) {
 	}
 }
 
-// parseValue parses a value: a column reference, an integer (optional leading
-// '-'), a string, '?', or NULL.
+// parseValue parses a value: an integer, a string, '?', or NULL.
 func (p *parser) parseValue() (Value, error) {
 	switch t := p.tok; t.Kind {
-	case kindIdent:
-		return p.parseColumnRef()
 	case kindInt:
 		p.advance()
-		return p.intLit(t, 1)
-	case kindMinus:
-		p.advance()
-		it, err := p.expect(kindInt, "integer after '-'")
+		n, err := strconv.Atoi(t.Text)
 		if err != nil {
-			return nil, err
+			// The scanner guarantees digits, so Atoi can fail only by overflowing.
+			return nil, p.errorf(t, "integer %s out of range", t.Text)
 		}
-		return p.intLit(it, -1)
+		return IntLit(n), nil
 	case kindString:
 		p.advance()
 		return StringLit(t.Text), nil
 	case kindParam:
 		p.advance()
-		return Wildcard{}, nil
+		p.params++
+		return Marker(p.params - 1), nil
 	case kwNULL:
 		p.advance()
 		return Null{}, nil
 	default:
 		return nil, p.errorf(t, "expected value")
 	}
-}
-
-// parseConst parses a value that must be a literal, not a column reference.
-func (p *parser) parseConst() (Value, error) {
-	t := p.tok
-	v, err := p.parseValue()
-	if err != nil {
-		return nil, err
-	}
-	if _, ok := v.(ColumnRef); ok {
-		return nil, p.errorf(t, "expected literal value, not a column")
-	}
-	return v, nil
-}
-
-func (p *parser) intLit(t token, sign int) (Value, error) {
-	n, err := strconv.Atoi(t.Text)
-	if err != nil {
-		// The scanner guarantees digits, so Atoi can fail only by overflowing.
-		return nil, p.errorf(t, "integer %s out of range", t.Text)
-	}
-	return IntLit(sign * n), nil
 }
